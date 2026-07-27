@@ -1,0 +1,30 @@
+package com.hexin.vector.lite.api;
+
+import com.hexin.vector.lite.model.*;
+
+import java.util.List;
+
+public interface VectorEngineClient {
+
+    void createStore(String storeName, VectorStoreDefinition definition);
+
+    void upsert(String storeName, VectorDocument document);
+
+    void upsertBatch(String storeName, List<VectorDocument> documents);
+
+    List<VectorSearchResult> searchByVector(VectorSearchRequest request);
+
+    List<VectorSearchResult> searchByText(VectorSearchRequest request);
+
+    List<VectorSearchResult> hybridSearch(VectorSearchRequest request);
+
+    DeleteResult deleteByIds(String storeName, List<String> ids);
+
+    DeleteResult deleteByFilter(String storeName, FilterExpression filter);
+
+    VectorStoreStats stats(String storeName);
+
+    void refresh(String storeName);
+
+    void reload(String storeName);
+}

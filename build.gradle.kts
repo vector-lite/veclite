@@ -1,10 +1,11 @@
 plugins {
     `java-library`
+    `maven-publish`
     id("org.springframework.boot") version "2.7.18" apply false
     id("io.spring.dependency-management") version "1.1.4"
 }
 
-group = "com.hexin"
+group = "org.github.erictowns"
 version = "1.0.0"
 
 java {
@@ -29,10 +30,34 @@ dependencies {
     implementation("com.fasterxml.jackson.core:jackson-databind")
 
     compileOnly("org.springframework.boot:spring-boot-starter-web")
+    compileOnly("org.springdoc:springdoc-openapi-common:1.7.0")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
 
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["java"])
+            groupId = project.group.toString()
+            artifactId = "veclite"
+            version = project.version.toString()
+
+            versionMapping {
+                usage("java-api") {
+                    fromResolutionOf("runtimeClasspath")
+                }
+                usage("java-runtime") {
+                    fromResolutionResult()
+                }
+            }
+        }
+    }
+    repositories {
+        mavenLocal()
+    }
 }

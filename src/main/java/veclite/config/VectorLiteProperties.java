@@ -78,9 +78,62 @@ public class VectorLiteProperties {
         }
     }
 
+    private SearcherConfig searcher = new SearcherConfig();
+
+    public SearcherConfig getSearcher() {
+        return searcher;
+    }
+
+    public void setSearcher(SearcherConfig searcher) {
+        this.searcher = searcher;
+    }
+
+    public static class SearcherConfig {
+        private ParallelConfig parallel = new ParallelConfig();
+
+        public ParallelConfig getParallel() {
+            return parallel;
+        }
+
+        public void setParallel(ParallelConfig parallel) {
+            this.parallel = parallel;
+        }
+    }
+
+    public static class ParallelConfig {
+        private boolean enabled = true;
+        private int threads = Math.max(1, Runtime.getRuntime().availableProcessors());
+        private int minVectorCount = 10000;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getThreads() {
+            return threads;
+        }
+
+        public void setThreads(int threads) {
+            this.threads = threads;
+        }
+
+        public int getMinVectorCount() {
+            return minVectorCount;
+        }
+
+        public void setMinVectorCount(int minVectorCount) {
+            this.minVectorCount = minVectorCount;
+        }
+    }
+
     public static class StorageConfig {
         private StorageType type = StorageType.SNAPSHOT_FILE;
         private SnapshotFileConfig snapshotFile = new SnapshotFileConfig();
+        private OffHeapConfig offHeap = new OffHeapConfig();
 
         public StorageType getType() {
             return type;
@@ -96,6 +149,26 @@ public class VectorLiteProperties {
 
         public void setSnapshotFile(SnapshotFileConfig snapshotFile) {
             this.snapshotFile = snapshotFile;
+        }
+
+        public OffHeapConfig getOffHeap() {
+            return offHeap;
+        }
+
+        public void setOffHeap(OffHeapConfig offHeap) {
+            this.offHeap = offHeap;
+        }
+    }
+
+    public static class OffHeapConfig {
+        private boolean enabled = false;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 

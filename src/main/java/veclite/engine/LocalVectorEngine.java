@@ -2,6 +2,7 @@ package veclite.engine;
 
 import veclite.api.VectorStoreDefinition;
 import veclite.api.VectorStoreManager;
+import veclite.config.VectorLiteProperties;
 import veclite.model.VectorStoreStats;
 
 import java.util.ArrayList;
@@ -11,7 +12,16 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class LocalVectorEngine implements VectorStoreManager {
 
+    private final VectorLiteProperties properties;
     private final Map<String, LocalVectorStore> stores = new ConcurrentHashMap<>();
+
+    public LocalVectorEngine() {
+        this(null);
+    }
+
+    public LocalVectorEngine(VectorLiteProperties properties) {
+        this.properties = properties;
+    }
 
     @Override
     public void createStore(String storeName, VectorStoreDefinition definition) {
@@ -19,7 +29,7 @@ public class LocalVectorEngine implements VectorStoreManager {
             throw new IllegalArgumentException("Store name and definition must not be null");
         }
         definition.setStoreName(storeName);
-        stores.putIfAbsent(storeName, new LocalVectorStore(definition));
+        stores.putIfAbsent(storeName, new LocalVectorStore(definition, properties));
     }
 
     @Override

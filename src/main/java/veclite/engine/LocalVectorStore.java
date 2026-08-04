@@ -11,58 +11,36 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /**
- * 单个向量库（Vector Store）的核心实现类。
+ * 单个向量库（Vector Store）的核心实现类 (V2.3 升级版)。
  * <p>
- * 负责维护：
- * 1. 向量缓冲池 (Float32 FloatVectorBuffer 或 SQ8 字节缓冲区 sq8Data)
- * 2. ID 与内部 Offset 偏移量映射 (IdOffsetIndex)
+ * 支持：
+ * 1. 向量缓冲区 (Float32 FloatVectorBuffer / In-Heap SQ8 / Off-Heap SQ8 OffHeapSQ8Buffer)
+ * 2. 数值化轻量 ID 映射 (IdOffsetIndex -> IntLongIdIndex)
  * 3. 软删除标记位图 (DeletedBitSet)
  * 4. 倒排位图索引中心 (MetadataFilterIndex)
- * 5. 紧凑型文档 Payload 存储 (CompactPayloadStorage)
+ * 5. 延迟加载/内存 Payload 存储 (CompactPayloadStorage / MMapPayloadStorage)
  */
 public class LocalVectorStore {
 
-    /** Store 配置定义（维度、度量方式、容量限额等） */
     private final VectorStoreDefinition definition;
-    
-    /** 全局配置属性 */
     private final VectorLiteProperties properties;
-    
-    /** 浮点模式下的连续向量存储 Buffer (SQ8模式下为 null) */
     private final FloatVectorBuffer vectorBuffer;
-    
-    /** 文档外部 ID ↔ 内部 Offset 偏移量的双向索引 */
     private final IdOffsetIndex idOffsetIndex;
-    
-    /** 软删除标志位图（避免物理删除导致全量向量重排） */
     private final DeletedBitSet deletedBitSet;
-    
-    /** 倒排位图索引中心 */
     private final MetadataFilterIndex metadataFilterIndex;
-    
-    /** 紧凑型文档 Payload 存储（平铺引用数组） */
-    private final CompactPayloadStorage payloadStorage;
-    
-    /** 向量数学计算计算器 */
+    private final PayloadStorage payloadStorage;
     private final VectorMath vectorMath;
 
-    // ---- SQ8 量化字段 (SQ8模式下生效，不分配 FloatVectorBuffer) ----
-    /** 是否启用 SQ8 量化 */
+    // ---- SQ8 量化与堆外内存字段 ----
     private final boolean sq8Enabled;
-    /** SQ8 量化的字节数据缓冲（平铺一维 byte 数组） */
+    private final boolean offHeapEnabled;
+    private final OffHeapSQ8Buffer offHeapSQ8Buffer;
     private volatile byte[] sq8Data;
-    /** SQ8 缓冲区当前向量容量 */
     private int sq8Capacity;
-    /** SQ8 缓冲区当前已写入向量条数 */
     private int sq8Size;
-    /** 全局最小值（用于量化标定） */
     private float sq8Min = Float.MAX_VALUE;
-    /** 全局最大值（用于量化标定） */
     private float sq8Max = -Float.MAX_VALUE;
 
-    /**
-     * 文档 Payload 数据承载类
-     */
     public static class DocumentPayload {
         private String id;
         private String text;
@@ -79,6 +57,18 @@ public class LocalVectorStore {
         public Map<String, Object> getMetadata() { return metadata; }
     }
 
+    private static class TopKCandidate {
+        final int offset;
+        final float score;
+
+        TopKCandidate(int offset, float score) {
+            this.offset = offset;
+            this.score = score;
+        }
+
+        public float getScore() { return score; }
+    }
+
     public LocalVectorStore(VectorStoreDefinition definition) {
         this(definition, null);
     }
@@ -88,26 +78,38 @@ public class LocalVectorStore {
         this.properties = properties;
         this.idOffsetIndex = new IdOffsetIndex();
         this.deletedBitSet = new DeletedBitSet();
-        this.payloadStorage = new CompactPayloadStorage(1024);
         this.metadataFilterIndex = new MetadataFilterIndex(definition.getIndexedMetadataFields());
         this.vectorMath = new PureJavaVectorMath();
 
-        // 纯 SQ8 与 Float32 互斥分配内存
+        boolean useMMap = properties != null && properties.getStorage().getPayload().getMode() == PayloadMode.MMAP;
+        if (useMMap) {
+            String basePath = properties.getStorage().getSnapshotFile().getBasePath();
+            this.payloadStorage = new MMapPayloadStorage(definition.getStoreName(), basePath, 1024);
+        } else {
+            this.payloadStorage = new CompactPayloadStorage(1024);
+        }
+
         if (definition.getQuantization() == QuantizationType.SQ8) {
             this.sq8Enabled = true;
-            this.sq8Capacity = 1024;
-            this.sq8Data = new byte[this.sq8Capacity * definition.getDimension()];
+            this.offHeapEnabled = properties != null && properties.getStorage().getOffHeap().isEnabled();
+            if (this.offHeapEnabled) {
+                this.offHeapSQ8Buffer = new OffHeapSQ8Buffer(definition.getDimension(), 1024);
+                this.sq8Data = null;
+            } else {
+                this.offHeapSQ8Buffer = null;
+                this.sq8Capacity = 1024;
+                this.sq8Data = new byte[this.sq8Capacity * definition.getDimension()];
+            }
             this.sq8Size = 0;
             this.vectorBuffer = null;
         } else {
             this.sq8Enabled = false;
+            this.offHeapEnabled = false;
+            this.offHeapSQ8Buffer = null;
             this.vectorBuffer = new FloatVectorBuffer(definition.getDimension(), 1024);
         }
     }
 
-    /**
-     * 插入或更新向量文档 (Upsert)。
-     */
     public synchronized void upsert(VectorDocument document) {
         if (document == null || document.getId() == null) {
             throw new IllegalArgumentException("Document and Document ID must not be null");
@@ -121,14 +123,17 @@ public class LocalVectorStore {
         Integer existingOffset = idOffsetIndex.getOffset(id);
 
         if (sq8Enabled) {
-            // 纯 SQ8 模式：只存 8-bit 量化字节
             updateSQ8MinMax(vector);
             int dim = definition.getDimension();
             byte[] quantized = new byte[dim];
             SQ8Quantizer.quantize(vector, sq8Min, sq8Max, quantized);
 
             if (existingOffset != null) {
-                System.arraycopy(quantized, 0, sq8Data, existingOffset * dim, dim);
+                if (offHeapEnabled && offHeapSQ8Buffer != null) {
+                    offHeapSQ8Buffer.updateAt(existingOffset, quantized);
+                } else {
+                    System.arraycopy(quantized, 0, sq8Data, existingOffset * dim, dim);
+                }
                 deletedBitSet.unmark(existingOffset);
                 payloadStorage.put(existingOffset, id, document.getText(), document.getMetadata());
                 metadataFilterIndex.indexDocument(existingOffset, document.getMetadata());
@@ -136,16 +141,21 @@ public class LocalVectorStore {
                 if (getActiveCount() >= definition.getMaxCapacity()) {
                     throw new IllegalStateException("Vector store [" + definition.getStoreName() + "] reached max capacity limit: " + definition.getMaxCapacity());
                 }
-                ensureSQ8Capacity(sq8Size + 1);
-                int newOffset = sq8Size;
-                System.arraycopy(quantized, 0, sq8Data, newOffset * dim, dim);
+                int newOffset;
+                if (offHeapEnabled && offHeapSQ8Buffer != null) {
+                    newOffset = offHeapSQ8Buffer.append(quantized);
+                    sq8Size = offHeapSQ8Buffer.getSize();
+                } else {
+                    ensureSQ8Capacity(sq8Size + 1);
+                    newOffset = sq8Size;
+                    System.arraycopy(quantized, 0, sq8Data, newOffset * dim, dim);
+                    sq8Size++;
+                }
                 idOffsetIndex.put(id, newOffset);
                 payloadStorage.put(newOffset, id, document.getText(), document.getMetadata());
                 metadataFilterIndex.indexDocument(newOffset, document.getMetadata());
-                sq8Size++;
             }
         } else {
-            // 默认 Float32 模式
             if (existingOffset != null) {
                 vectorBuffer.updateAt(existingOffset, vector);
                 deletedBitSet.unmark(existingOffset);
@@ -163,7 +173,6 @@ public class LocalVectorStore {
         }
     }
 
-    /** 增量更新 SQ8 全局 min/max 标定范围 */
     private void updateSQ8MinMax(float[] vector) {
         for (float v : vector) {
             if (v < sq8Min) sq8Min = v;
@@ -171,9 +180,8 @@ public class LocalVectorStore {
         }
     }
 
-    /** SQ8 字节缓冲区自动扩容（1.5 倍策略） */
     private void ensureSQ8Capacity(int minCapacity) {
-        if (minCapacity > sq8Capacity) {
+        if (!offHeapEnabled && minCapacity > sq8Capacity) {
             int newCapacity = sq8Capacity + (sq8Capacity >> 1);
             if (newCapacity < minCapacity) newCapacity = minCapacity;
             byte[] newData = new byte[newCapacity * definition.getDimension()];
@@ -183,9 +191,6 @@ public class LocalVectorStore {
         }
     }
 
-    /**
-     * Flat 检索入口。
-     */
     public List<VectorSearchResult> search(VectorSearchRequest request) {
         if (request == null) {
             return Collections.emptyList();
@@ -201,7 +206,7 @@ public class LocalVectorStore {
         FilterExpression filter = request.getFilter();
 
         boolean isEuclidean = "EUCLIDEAN".equalsIgnoreCase(metric) || "L2".equalsIgnoreCase(metric);
-        int totalCount = sq8Enabled ? sq8Size : vectorBuffer.getSize();
+        int totalCount = sq8Enabled ? (offHeapEnabled ? offHeapSQ8Buffer.getSize() : sq8Size) : vectorBuffer.getSize();
 
         boolean enableParallel = properties != null && properties.getSearcher().getParallel().isEnabled()
                 && totalCount >= properties.getSearcher().getParallel().getMinVectorCount();
@@ -213,17 +218,13 @@ public class LocalVectorStore {
         }
     }
 
-    /**
-     * 单线程顺序 Flat 检索逻辑。
-     */
     private List<VectorSearchResult> searchSequential(VectorSearchRequest request, float[] queryVector, int topK,
                                                        Float minScore, String metric, FilterExpression filter,
                                                        boolean isEuclidean, int totalCount) {
-        PriorityQueue<VectorSearchResult> heap = new PriorityQueue<>(topK, isEuclidean ? 
-                Comparator.comparingDouble(VectorSearchResult::getScore).reversed() : 
-                Comparator.comparingDouble(VectorSearchResult::getScore));
+        PriorityQueue<TopKCandidate> heap = new PriorityQueue<>(topK, isEuclidean ?
+                Comparator.comparingDouble(TopKCandidate::getScore).reversed() :
+                Comparator.comparingDouble(TopKCandidate::getScore));
 
-        // 预先使用倒排位图计算匹配 BitSet（零开销前置过滤）
         BitSet matchingBitSet = metadataFilterIndex.evaluate(filter);
 
         if (!sq8Enabled && vectorBuffer != null) {
@@ -236,11 +237,9 @@ public class LocalVectorStore {
             for (int offset = 0; offset < totalCount; offset++) {
                 if (deletedBitSet.isDeleted(offset)) continue;
 
-                // 1. 高速倒排位图前置过滤（零对象开销，单指令按位判断）
                 if (matchingBitSet != null && !matchingBitSet.get(offset)) {
                     continue;
                 }
-                // 2. 未建倒排索引的动态字段降级比对
                 if (matchingBitSet == null && filter != null) {
                     Map<String, Object> metadata = payloadStorage.getMetadata(offset);
                     if (!matchesFilter(metadata, filter)) continue;
@@ -248,7 +247,11 @@ public class LocalVectorStore {
 
                 float score;
                 if (sq8Enabled) {
-                    System.arraycopy(sq8Data, offset * dim, targetBytes, 0, dim);
+                    if (offHeapEnabled && offHeapSQ8Buffer != null) {
+                        offHeapSQ8Buffer.copyVectorTo(offset, targetBytes);
+                    } else {
+                        System.arraycopy(sq8Data, offset * dim, targetBytes, 0, dim);
+                    }
                     score = SQ8Quantizer.calculateCosine(queryVector, targetBytes, sq8Min, sq8Max);
                 } else {
                     score = vectorBuffer.calculateScoreZeroCopy(vectorMath, metric, queryVector, offset);
@@ -259,20 +262,16 @@ public class LocalVectorStore {
                     else if (!isEuclidean && score < minScore) continue;
                 }
 
-                String id = payloadStorage.getId(offset);
-                String text = payloadStorage.getText(offset);
-                Map<String, Object> metadata = payloadStorage.getMetadata(offset);
-
-                VectorSearchResult result = new VectorSearchResult(id, score, text, metadata);
+                TopKCandidate candidate = new TopKCandidate(offset, score);
                 if (heap.size() < topK) {
-                    heap.offer(result);
+                    heap.offer(candidate);
                 } else if (heap.peek() != null) {
                     if (isEuclidean && score < heap.peek().getScore()) {
                         heap.poll();
-                        heap.offer(result);
+                        heap.offer(candidate);
                     } else if (!isEuclidean && score > heap.peek().getScore()) {
                         heap.poll();
-                        heap.offer(result);
+                        heap.offer(candidate);
                     }
                 }
             }
@@ -284,15 +283,17 @@ public class LocalVectorStore {
 
         List<VectorSearchResult> results = new ArrayList<>(heap.size());
         while (!heap.isEmpty()) {
-            results.add(heap.poll());
+            TopKCandidate cand = heap.poll();
+            DocumentPayload payload = payloadStorage.get(cand.offset);
+            String id = payload != null ? payload.getId() : idOffsetIndex.getId(cand.offset);
+            String text = payload != null ? payload.getText() : null;
+            Map<String, Object> metadata = payload != null ? payload.getMetadata() : null;
+            results.add(new VectorSearchResult(id, cand.score, text, metadata));
         }
         Collections.reverse(results);
         return results;
     }
 
-    /**
-     * 多线程并行 Chunk 分段检索逻辑。
-     */
     private List<VectorSearchResult> searchParallel(VectorSearchRequest request, float[] queryVector, int topK,
                                                      Float minScore, String metric, FilterExpression filter,
                                                      boolean isEuclidean, int totalCount) {
@@ -300,10 +301,9 @@ public class LocalVectorStore {
         ExecutorService executor = ParallelSearchExecutor.getExecutor(threads);
 
         int chunkSize = (int) Math.ceil((double) totalCount / threads);
-        List<Future<List<VectorSearchResult>>> futures = new ArrayList<>(threads);
+        List<Future<List<TopKCandidate>>> futures = new ArrayList<>(threads);
 
         final int dim = definition.getDimension();
-        // 预先使用倒排位图计算匹配 BitSet（多线程共享只读 BitSet）
         final BitSet matchingBitSet = metadataFilterIndex.evaluate(filter);
 
         if (!sq8Enabled && vectorBuffer != null) {
@@ -317,20 +317,18 @@ public class LocalVectorStore {
                 if (startOffset >= totalCount) break;
 
                 futures.add(executor.submit(() -> {
-                    PriorityQueue<VectorSearchResult> localHeap = new PriorityQueue<>(topK, isEuclidean ?
-                            Comparator.comparingDouble(VectorSearchResult::getScore).reversed() :
-                            Comparator.comparingDouble(VectorSearchResult::getScore));
+                    PriorityQueue<TopKCandidate> localHeap = new PriorityQueue<>(topK, isEuclidean ?
+                            Comparator.comparingDouble(TopKCandidate::getScore).reversed() :
+                            Comparator.comparingDouble(TopKCandidate::getScore));
 
                     byte[] localSQ8Bytes = sq8Enabled ? new byte[dim] : null;
 
                     for (int offset = startOffset; offset < endOffset; offset++) {
                         if (deletedBitSet.isDeleted(offset)) continue;
 
-                        // 1. 位图零开销前置过滤
                         if (matchingBitSet != null && !matchingBitSet.get(offset)) {
                             continue;
                         }
-                        // 2. 降级过滤
                         if (matchingBitSet == null && filter != null) {
                             Map<String, Object> metadata = payloadStorage.getMetadata(offset);
                             if (!matchesFilter(metadata, filter)) continue;
@@ -338,7 +336,11 @@ public class LocalVectorStore {
 
                         float score;
                         if (sq8Enabled) {
-                            System.arraycopy(sq8Data, offset * dim, localSQ8Bytes, 0, dim);
+                            if (offHeapEnabled && offHeapSQ8Buffer != null) {
+                                offHeapSQ8Buffer.copyVectorTo(offset, localSQ8Bytes);
+                            } else {
+                                System.arraycopy(sq8Data, offset * dim, localSQ8Bytes, 0, dim);
+                            }
                             score = SQ8Quantizer.calculateCosine(queryVector, localSQ8Bytes, sq8Min, sq8Max);
                         } else {
                             score = vectorBuffer.calculateScoreZeroCopy(vectorMath, metric, queryVector, offset);
@@ -349,25 +351,21 @@ public class LocalVectorStore {
                             else if (!isEuclidean && score < minScore) continue;
                         }
 
-                        String id = payloadStorage.getId(offset);
-                        String text = payloadStorage.getText(offset);
-                        Map<String, Object> metadata = payloadStorage.getMetadata(offset);
-
-                        VectorSearchResult result = new VectorSearchResult(id, score, text, metadata);
+                        TopKCandidate candidate = new TopKCandidate(offset, score);
                         if (localHeap.size() < topK) {
-                            localHeap.offer(result);
+                            localHeap.offer(candidate);
                         } else if (localHeap.peek() != null) {
                             if (isEuclidean && score < localHeap.peek().getScore()) {
                                 localHeap.poll();
-                                localHeap.offer(result);
+                                localHeap.offer(candidate);
                             } else if (!isEuclidean && score > localHeap.peek().getScore()) {
                                 localHeap.poll();
-                                localHeap.offer(result);
+                                localHeap.offer(candidate);
                             }
                         }
                     }
 
-                    List<VectorSearchResult> chunkResults = new ArrayList<>(localHeap.size());
+                    List<TopKCandidate> chunkResults = new ArrayList<>(localHeap.size());
                     while (!localHeap.isEmpty()) {
                         chunkResults.add(localHeap.poll());
                     }
@@ -375,14 +373,13 @@ public class LocalVectorStore {
                 }));
             }
 
-            // 合并所有线程的局部 TopK 结果
-            PriorityQueue<VectorSearchResult> globalHeap = new PriorityQueue<>(topK, isEuclidean ?
-                    Comparator.comparingDouble(VectorSearchResult::getScore).reversed() :
-                    Comparator.comparingDouble(VectorSearchResult::getScore));
+            PriorityQueue<TopKCandidate> globalHeap = new PriorityQueue<>(topK, isEuclidean ?
+                    Comparator.comparingDouble(TopKCandidate::getScore).reversed() :
+                    Comparator.comparingDouble(TopKCandidate::getScore));
 
-            for (Future<List<VectorSearchResult>> future : futures) {
-                List<VectorSearchResult> chunkList = future.get();
-                for (VectorSearchResult res : chunkList) {
+            for (Future<List<TopKCandidate>> future : futures) {
+                List<TopKCandidate> chunkList = future.get();
+                for (TopKCandidate res : chunkList) {
                     if (globalHeap.size() < topK) {
                         globalHeap.offer(res);
                     } else if (globalHeap.peek() != null) {
@@ -399,7 +396,12 @@ public class LocalVectorStore {
 
             List<VectorSearchResult> results = new ArrayList<>(globalHeap.size());
             while (!globalHeap.isEmpty()) {
-                results.add(globalHeap.poll());
+                TopKCandidate cand = globalHeap.poll();
+                DocumentPayload payload = payloadStorage.get(cand.offset);
+                String id = payload != null ? payload.getId() : idOffsetIndex.getId(cand.offset);
+                String text = payload != null ? payload.getText() : null;
+                Map<String, Object> metadata = payload != null ? payload.getMetadata() : null;
+                results.add(new VectorSearchResult(id, cand.score, text, metadata));
             }
             Collections.reverse(results);
             return results;
@@ -412,9 +414,6 @@ public class LocalVectorStore {
         }
     }
 
-    /**
-     * 根据 ID 列表逻辑删除向量。
-     */
     public synchronized DeleteResult deleteByIds(List<String> ids) {
         if (ids == null || ids.isEmpty()) {
             return new DeleteResult(0);
@@ -432,15 +431,12 @@ public class LocalVectorStore {
         return new DeleteResult(count);
     }
 
-    /**
-     * 根据 Filter 条件逻辑删除匹配的所有向量。
-     */
     public synchronized DeleteResult deleteByFilter(FilterExpression filter) {
         if (filter == null) {
             return new DeleteResult(0);
         }
         int count = 0;
-        int totalCount = sq8Enabled ? sq8Size : vectorBuffer.getSize();
+        int totalCount = sq8Enabled ? (offHeapEnabled ? offHeapSQ8Buffer.getSize() : sq8Size) : vectorBuffer.getSize();
         BitSet matchingBitSet = metadataFilterIndex.evaluate(filter);
 
         for (int offset = 0; offset < totalCount; offset++) {
@@ -461,9 +457,6 @@ public class LocalVectorStore {
         return new DeleteResult(count);
     }
 
-    /**
-     * 获取 Store 当前统计数据。
-     */
     public VectorStoreStats getStats() {
         VectorStoreStats stats = new VectorStoreStats();
         stats.setStoreName(definition.getStoreName());
@@ -475,9 +468,6 @@ public class LocalVectorStore {
         return stats;
     }
 
-    /**
-     * 获取当前有效（未被逻辑删除）的向量总数。
-     */
     public int getActiveCount() {
         return idOffsetIndex.size() - deletedBitSet.getDeletedCount();
     }
@@ -486,9 +476,6 @@ public class LocalVectorStore {
         return definition;
     }
 
-    /**
-     * 校验文档元数据是否匹配 Filter 表达式。
-     */
     private boolean matchesFilter(Map<String, Object> metadata, FilterExpression filter) {
         if (filter == null || filter.getField() == null) {
             return true;
@@ -509,7 +496,7 @@ public class LocalVectorStore {
     // -- 专门提供给 SnapshotFileStorage 持久化使用的包级访问器 --
 
     public int getVectorBufferSize() {
-        return sq8Enabled ? sq8Size : (vectorBuffer != null ? vectorBuffer.getSize() : 0);
+        return sq8Enabled ? (offHeapEnabled ? offHeapSQ8Buffer.getSize() : sq8Size) : (vectorBuffer != null ? vectorBuffer.getSize() : 0);
     }
 
     public boolean isOffsetDeleted(int offset) {
@@ -520,7 +507,7 @@ public class LocalVectorStore {
         if (sq8Enabled) {
             int dim = definition.getDimension();
             byte[] bytes = new byte[dim];
-            System.arraycopy(sq8Data, offset * dim, bytes, 0, dim);
+            copySQ8VectorFromBuffer(offset, bytes);
             SQ8Quantizer.dequantize(bytes, sq8Min, sq8Max, dest);
         } else {
             vectorBuffer.copyVectorTo(offset, dest);
@@ -528,8 +515,12 @@ public class LocalVectorStore {
     }
 
     public void copySQ8VectorFromBuffer(int offset, byte[] dest) {
-        int dim = definition.getDimension();
-        System.arraycopy(sq8Data, offset * dim, dest, 0, dim);
+        if (offHeapEnabled && offHeapSQ8Buffer != null) {
+            offHeapSQ8Buffer.copyVectorTo(offset, dest);
+        } else if (sq8Data != null) {
+            int dim = definition.getDimension();
+            System.arraycopy(sq8Data, offset * dim, dest, 0, dim);
+        }
     }
 
     public DocumentPayload getDocumentPayloadAt(int offset) {
@@ -541,6 +532,11 @@ public class LocalVectorStore {
     }
 
     public byte[] getSQ8RawData() {
+        if (offHeapEnabled && offHeapSQ8Buffer != null) {
+            byte[] data = new byte[offHeapSQ8Buffer.getSize() * definition.getDimension()];
+            offHeapSQ8Buffer.copyAllTo(data);
+            return data;
+        }
         return sq8Data;
     }
 
@@ -555,13 +551,24 @@ public class LocalVectorStore {
         return definition.getDimension();
     }
 
-    /** 获取 SQ8 量化字节缓冲区实际使用的字节数 */
     public long getSQ8DataSizeBytes() {
-        return sq8Enabled ? (long) sq8Size * definition.getDimension() : 0;
+        return sq8Enabled ? (long) getVectorBufferSize() * definition.getDimension() : 0;
     }
 
-    /** 是否启用了 SQ8 量化 */
     public boolean isSQ8Enabled() {
         return sq8Enabled;
+    }
+
+    public boolean isOffHeapEnabled() {
+        return sq8Enabled && offHeapEnabled;
+    }
+
+    public void close() {
+        if (payloadStorage != null) {
+            try {
+                payloadStorage.close();
+            } catch (Exception ignored) {
+            }
+        }
     }
 }

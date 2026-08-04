@@ -4,13 +4,12 @@ import java.util.Arrays;
 import java.util.Map;
 
 /**
- * 紧凑的平铺 Payload 存储管理器 (Compact Payload Storage)。
+ * 紧凑的平铺内存 Payload 存储管理器 (Compact Payload Storage)。
  * <p>
- * 替代原先重型的 ConcurrentHashMap<Integer, DocumentPayload>。
  * 采用一维引用数组以 offset 为下标直接定位，消除 ConcurrentHashMap Node、
- * 装箱 Integer key 以及小 Map 包装节点产生的庞大 JVM 对象头开销。
+ * 装箱 Integer key 以及小 Map 包装节点产生的 JVM 对象头开销。
  */
-public class CompactPayloadStorage {
+public class CompactPayloadStorage implements PayloadStorage {
 
     private String[] ids;
     private String[] texts;
@@ -26,9 +25,7 @@ public class CompactPayloadStorage {
         this.metadatas = new Map[capacity];
     }
 
-    /**
-     * 写入或更新指定 offset 位置上的 Document Payload 数据。
-     */
+    @Override
     public synchronized void put(int offset, String id, String text, Map<String, Object> metadata) {
         ensureCapacity(offset + 1);
         ids[offset] = id;
@@ -36,6 +33,7 @@ public class CompactPayloadStorage {
         metadatas[offset] = metadata;
     }
 
+    @Override
     public synchronized LocalVectorStore.DocumentPayload get(int offset) {
         if (offset < 0 || offset >= capacity || ids[offset] == null) {
             return null;
@@ -43,14 +41,17 @@ public class CompactPayloadStorage {
         return new LocalVectorStore.DocumentPayload(ids[offset], texts[offset], metadatas[offset]);
     }
 
+    @Override
     public String getId(int offset) {
         return (offset >= 0 && offset < capacity) ? ids[offset] : null;
     }
 
+    @Override
     public String getText(int offset) {
         return (offset >= 0 && offset < capacity) ? texts[offset] : null;
     }
 
+    @Override
     public Map<String, Object> getMetadata(int offset) {
         return (offset >= 0 && offset < capacity) ? metadatas[offset] : null;
     }

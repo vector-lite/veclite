@@ -134,6 +134,7 @@ public class VectorLiteProperties {
         private StorageType type = StorageType.SNAPSHOT_FILE;
         private SnapshotFileConfig snapshotFile = new SnapshotFileConfig();
         private OffHeapConfig offHeap = new OffHeapConfig();
+        private PayloadConfig payload = new PayloadConfig();
 
         public StorageType getType() {
             return type;
@@ -157,6 +158,26 @@ public class VectorLiteProperties {
 
         public void setOffHeap(OffHeapConfig offHeap) {
             this.offHeap = offHeap;
+        }
+
+        public PayloadConfig getPayload() {
+            return payload;
+        }
+
+        public void setPayload(PayloadConfig payload) {
+            this.payload = payload;
+        }
+    }
+
+    public static class PayloadConfig {
+        private veclite.model.PayloadMode mode = veclite.model.PayloadMode.MEMORY;
+
+        public veclite.model.PayloadMode getMode() {
+            return mode;
+        }
+
+        public void setMode(veclite.model.PayloadMode mode) {
+            this.mode = mode;
         }
     }
 

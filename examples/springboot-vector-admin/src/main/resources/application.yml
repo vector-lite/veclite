@@ -1,0 +1,10 @@
+server:
+  port: 8080
+veclite:
+  web:
+    enabled: true
+    allowed-origins: http://localhost:5173
+  storage:
+    type: SNAPSHOT_FILE
+    snapshot-file:
+      base-path: ./data/vector-lite

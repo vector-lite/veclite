@@ -130,6 +130,14 @@ public class OffHeapSQ8Buffer {
         }
     }
 
+    public void acquireReadLock() {
+        readLock.lock();
+    }
+
+    public void releaseReadLock() {
+        readLock.unlock();
+    }
+
     public ByteBuffer getDirectBuffer() {
         return directBuffer;
     }

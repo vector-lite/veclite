@@ -12,10 +12,12 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("${veclite.web.base-path:/veclite/api/v1}")
 @ConditionalOnProperty(name = "veclite.web.enabled", havingValue = "true")
+@CrossOrigin(origins = "${veclite.web.allowed-origins:*}")
 @Tag(name = "VecLite", description = "Local vector search engine endpoints")
 public class VectorLiteDebugController {
 
@@ -35,11 +37,11 @@ public class VectorLiteDebugController {
 
     @Operation(summary = "Create a new vector store")
     @PostMapping("/stores/{storeName}")
-    public String createStore(
+    public Map<String, String> createStore(
             @Parameter(description = "Name of the store to create") @PathVariable String storeName,
             @RequestBody VectorStoreDefinition definition) {
         client.createStore(storeName, definition);
-        return "SUCCESS";
+        return success();
     }
 
     @Operation(summary = "Get stats for a vector store")
@@ -49,13 +51,30 @@ public class VectorLiteDebugController {
         return client.stats(storeName);
     }
 
+    @Operation(summary = "Delete a vector store")
+    @DeleteMapping("/stores/{storeName}")
+    public Map<String, String> dropStore(
+            @Parameter(description = "Store name") @PathVariable String storeName) {
+        storeManager.dropStore(storeName);
+        return success();
+    }
+
     @Operation(summary = "Upsert a single document into a store")
     @PostMapping("/stores/{storeName}/documents")
-    public String upsert(
+    public Map<String, String> upsert(
             @Parameter(description = "Store name") @PathVariable String storeName,
             @RequestBody VectorDocument document) {
         client.upsert(storeName, document);
-        return "SUCCESS";
+        return success();
+    }
+
+    @Operation(summary = "List documents in a vector store")
+    @GetMapping("/stores/{storeName}/documents")
+    public VectorDocumentPage listDocuments(
+            @Parameter(description = "Store name") @PathVariable String storeName,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return client.listDocuments(storeName, page, size);
     }
 
     @Operation(summary = "Search by vector in a store")
@@ -88,9 +107,21 @@ public class VectorLiteDebugController {
 
     @Operation(summary = "Reload store data from persistence")
     @PostMapping("/stores/{storeName}/reload")
-    public String reload(
+    public Map<String, String> reload(
             @Parameter(description = "Store name") @PathVariable String storeName) {
         client.reload(storeName);
-        return "SUCCESS";
+        return success();
+    }
+
+    @Operation(summary = "Persist the latest in-memory data for a store")
+    @PostMapping("/stores/{storeName}/refresh")
+    public Map<String, String> refresh(
+            @Parameter(description = "Store name") @PathVariable String storeName) {
+        client.refresh(storeName);
+        return success();
+    }
+
+    private Map<String, String> success() {
+        return Map.of("status", "SUCCESS");
     }
 }

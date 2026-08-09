@@ -90,6 +90,7 @@ public class VectorLiteProperties {
 
     public static class SearcherConfig {
         private ParallelConfig parallel = new ParallelConfig();
+        private PrecomputationConfig precomputation = new PrecomputationConfig();
 
         public ParallelConfig getParallel() {
             return parallel;
@@ -97,6 +98,26 @@ public class VectorLiteProperties {
 
         public void setParallel(ParallelConfig parallel) {
             this.parallel = parallel;
+        }
+
+        public PrecomputationConfig getPrecomputation() {
+            return precomputation;
+        }
+
+        public void setPrecomputation(PrecomputationConfig precomputation) {
+            this.precomputation = precomputation;
+        }
+    }
+
+    public static class PrecomputationConfig {
+        private boolean enabled = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 

@@ -36,6 +36,8 @@ public class LocalVectorStore {
     private final boolean offHeapEnabled;
     private final OffHeapSQ8Buffer offHeapSQ8Buffer;
     private volatile byte[] sq8Data;
+    private volatile int[] sq8ByteSums;
+    private volatile int[] sq8ByteSqSums;
     private int sq8Capacity;
     private int sq8Size;
     private float sq8Min = Float.MAX_VALUE;
@@ -92,12 +94,14 @@ public class LocalVectorStore {
         if (definition.getQuantization() == QuantizationType.SQ8) {
             this.sq8Enabled = true;
             this.offHeapEnabled = properties != null && properties.getStorage().getOffHeap().isEnabled();
+            this.sq8Capacity = 1024;
+            this.sq8ByteSums = new int[this.sq8Capacity];
+            this.sq8ByteSqSums = new int[this.sq8Capacity];
             if (this.offHeapEnabled) {
                 this.offHeapSQ8Buffer = new OffHeapSQ8Buffer(definition.getDimension(), 1024);
                 this.sq8Data = null;
             } else {
                 this.offHeapSQ8Buffer = null;
-                this.sq8Capacity = 1024;
                 this.sq8Data = new byte[this.sq8Capacity * definition.getDimension()];
             }
             this.sq8Size = 0;
@@ -106,6 +110,8 @@ public class LocalVectorStore {
             this.sq8Enabled = false;
             this.offHeapEnabled = false;
             this.offHeapSQ8Buffer = null;
+            this.sq8ByteSums = null;
+            this.sq8ByteSqSums = null;
             this.vectorBuffer = new FloatVectorBuffer(definition.getDimension(), 1024);
         }
     }
@@ -128,11 +134,22 @@ public class LocalVectorStore {
             byte[] quantized = new byte[dim];
             SQ8Quantizer.quantize(vector, sq8Min, sq8Max, quantized);
 
+            int bSum = 0;
+            int bSqSum = 0;
+            for (byte b : quantized) {
+                bSum += b;
+                bSqSum += b * b;
+            }
+
             if (existingOffset != null) {
                 if (offHeapEnabled && offHeapSQ8Buffer != null) {
                     offHeapSQ8Buffer.updateAt(existingOffset, quantized);
                 } else {
                     System.arraycopy(quantized, 0, sq8Data, existingOffset * dim, dim);
+                }
+                if (existingOffset < sq8ByteSums.length) {
+                    sq8ByteSums[existingOffset] = bSum;
+                    sq8ByteSqSums[existingOffset] = bSqSum;
                 }
                 deletedBitSet.unmark(existingOffset);
                 payloadStorage.put(existingOffset, id, document.getText(), document.getMetadata());
@@ -151,6 +168,9 @@ public class LocalVectorStore {
                     System.arraycopy(quantized, 0, sq8Data, newOffset * dim, dim);
                     sq8Size++;
                 }
+                ensureNormsCapacity(newOffset + 1);
+                sq8ByteSums[newOffset] = bSum;
+                sq8ByteSqSums[newOffset] = bSqSum;
                 idOffsetIndex.put(id, newOffset);
                 payloadStorage.put(newOffset, id, document.getText(), document.getMetadata());
                 metadataFilterIndex.indexDocument(newOffset, document.getMetadata());
@@ -191,6 +211,22 @@ public class LocalVectorStore {
         }
     }
 
+    private void ensureNormsCapacity(int minCapacity) {
+        if (sq8ByteSums == null || sq8ByteSqSums == null) {
+            sq8ByteSums = new int[Math.max(minCapacity, 1024)];
+            sq8ByteSqSums = new int[Math.max(minCapacity, 1024)];
+        } else if (minCapacity > sq8ByteSums.length) {
+            int newCap = sq8ByteSums.length + (sq8ByteSums.length >> 1);
+            if (newCap < minCapacity) newCap = minCapacity;
+            int[] newSums = new int[newCap];
+            int[] newSqSums = new int[newCap];
+            System.arraycopy(sq8ByteSums, 0, newSums, 0, sq8ByteSums.length);
+            System.arraycopy(sq8ByteSqSums, 0, newSqSums, 0, sq8ByteSqSums.length);
+            sq8ByteSums = newSums;
+            sq8ByteSqSums = newSqSums;
+        }
+    }
+
     public List<VectorSearchResult> search(VectorSearchRequest request) {
         if (request == null) {
             return Collections.emptyList();
@@ -227,7 +263,12 @@ public class LocalVectorStore {
 
         BitSet matchingBitSet = metadataFilterIndex.evaluate(filter);
 
-        if (!sq8Enabled && vectorBuffer != null) {
+        boolean usePrecomp = sq8Enabled && (properties == null || properties.getSearcher().getPrecomputation().isEnabled());
+        SQ8Quantizer.SQ8QueryPrecomputation precomp = usePrecomp ? SQ8Quantizer.precompute(queryVector, sq8Min, sq8Max) : null;
+
+        if (sq8Enabled && offHeapEnabled && offHeapSQ8Buffer != null) {
+            offHeapSQ8Buffer.acquireReadLock();
+        } else if (!sq8Enabled && vectorBuffer != null) {
             vectorBuffer.acquireReadLock();
         }
         try {
@@ -247,12 +288,24 @@ public class LocalVectorStore {
 
                 float score;
                 if (sq8Enabled) {
-                    if (offHeapEnabled && offHeapSQ8Buffer != null) {
-                        offHeapSQ8Buffer.copyVectorTo(offset, targetBytes);
+                    if (usePrecomp) {
+                        int bSum = (sq8ByteSums != null && offset < sq8ByteSums.length) ? sq8ByteSums[offset] : 0;
+                        int bSqSum = (sq8ByteSqSums != null && offset < sq8ByteSqSums.length) ? sq8ByteSqSums[offset] : 0;
+                        float targetNormSq = precomp.d_c1_sq + precomp.c1_c2_2 * bSum + precomp.c2_sq * bSqSum;
+                        if (offHeapEnabled && offHeapSQ8Buffer != null) {
+                            offHeapSQ8Buffer.getDirectBuffer().get(offset * dim, targetBytes, 0, dim);
+                            score = SQ8Quantizer.calculateScorePrecomputed(precomp, targetBytes, 0, targetNormSq, metric);
+                        } else {
+                            score = SQ8Quantizer.calculateScorePrecomputed(precomp, sq8Data, offset * dim, targetNormSq, metric);
+                        }
                     } else {
-                        System.arraycopy(sq8Data, offset * dim, targetBytes, 0, dim);
+                        if (offHeapEnabled && offHeapSQ8Buffer != null) {
+                            offHeapSQ8Buffer.copyVectorTo(offset, targetBytes);
+                        } else {
+                            System.arraycopy(sq8Data, offset * dim, targetBytes, 0, dim);
+                        }
+                        score = SQ8Quantizer.calculateCosine(queryVector, targetBytes, sq8Min, sq8Max);
                     }
-                    score = SQ8Quantizer.calculateCosine(queryVector, targetBytes, sq8Min, sq8Max);
                 } else {
                     score = vectorBuffer.calculateScoreZeroCopy(vectorMath, metric, queryVector, offset);
                 }
@@ -262,21 +315,20 @@ public class LocalVectorStore {
                     else if (!isEuclidean && score < minScore) continue;
                 }
 
-                TopKCandidate candidate = new TopKCandidate(offset, score);
                 if (heap.size() < topK) {
-                    heap.offer(candidate);
+                    heap.offer(new TopKCandidate(offset, score));
                 } else if (heap.peek() != null) {
-                    if (isEuclidean && score < heap.peek().getScore()) {
+                    float currentPeekScore = heap.peek().getScore();
+                    if (isEuclidean ? (score < currentPeekScore) : (score > currentPeekScore)) {
                         heap.poll();
-                        heap.offer(candidate);
-                    } else if (!isEuclidean && score > heap.peek().getScore()) {
-                        heap.poll();
-                        heap.offer(candidate);
+                        heap.offer(new TopKCandidate(offset, score));
                     }
                 }
             }
         } finally {
-            if (!sq8Enabled && vectorBuffer != null) {
+            if (sq8Enabled && offHeapEnabled && offHeapSQ8Buffer != null) {
+                offHeapSQ8Buffer.releaseReadLock();
+            } else if (!sq8Enabled && vectorBuffer != null) {
                 vectorBuffer.releaseReadLock();
             }
         }
@@ -306,7 +358,12 @@ public class LocalVectorStore {
         final int dim = definition.getDimension();
         final BitSet matchingBitSet = metadataFilterIndex.evaluate(filter);
 
-        if (!sq8Enabled && vectorBuffer != null) {
+        boolean usePrecomp = sq8Enabled && (properties == null || properties.getSearcher().getPrecomputation().isEnabled());
+        SQ8Quantizer.SQ8QueryPrecomputation precomp = usePrecomp ? SQ8Quantizer.precompute(queryVector, sq8Min, sq8Max) : null;
+
+        if (sq8Enabled && offHeapEnabled && offHeapSQ8Buffer != null) {
+            offHeapSQ8Buffer.acquireReadLock();
+        } else if (!sq8Enabled && vectorBuffer != null) {
             vectorBuffer.acquireReadLock();
         }
         try {
@@ -336,12 +393,24 @@ public class LocalVectorStore {
 
                         float score;
                         if (sq8Enabled) {
-                            if (offHeapEnabled && offHeapSQ8Buffer != null) {
-                                offHeapSQ8Buffer.copyVectorTo(offset, localSQ8Bytes);
+                            if (usePrecomp) {
+                                int bSum = (sq8ByteSums != null && offset < sq8ByteSums.length) ? sq8ByteSums[offset] : 0;
+                                int bSqSum = (sq8ByteSqSums != null && offset < sq8ByteSqSums.length) ? sq8ByteSqSums[offset] : 0;
+                                float targetNormSq = precomp.d_c1_sq + precomp.c1_c2_2 * bSum + precomp.c2_sq * bSqSum;
+                                if (offHeapEnabled && offHeapSQ8Buffer != null) {
+                                    offHeapSQ8Buffer.getDirectBuffer().get(offset * dim, localSQ8Bytes, 0, dim);
+                                    score = SQ8Quantizer.calculateScorePrecomputed(precomp, localSQ8Bytes, 0, targetNormSq, metric);
+                                } else {
+                                    score = SQ8Quantizer.calculateScorePrecomputed(precomp, sq8Data, offset * dim, targetNormSq, metric);
+                                }
                             } else {
-                                System.arraycopy(sq8Data, offset * dim, localSQ8Bytes, 0, dim);
+                                if (offHeapEnabled && offHeapSQ8Buffer != null) {
+                                    offHeapSQ8Buffer.copyVectorTo(offset, localSQ8Bytes);
+                                } else {
+                                    System.arraycopy(sq8Data, offset * dim, localSQ8Bytes, 0, dim);
+                                }
+                                score = SQ8Quantizer.calculateCosine(queryVector, localSQ8Bytes, sq8Min, sq8Max);
                             }
-                            score = SQ8Quantizer.calculateCosine(queryVector, localSQ8Bytes, sq8Min, sq8Max);
                         } else {
                             score = vectorBuffer.calculateScoreZeroCopy(vectorMath, metric, queryVector, offset);
                         }
@@ -351,16 +420,13 @@ public class LocalVectorStore {
                             else if (!isEuclidean && score < minScore) continue;
                         }
 
-                        TopKCandidate candidate = new TopKCandidate(offset, score);
                         if (localHeap.size() < topK) {
-                            localHeap.offer(candidate);
+                            localHeap.offer(new TopKCandidate(offset, score));
                         } else if (localHeap.peek() != null) {
-                            if (isEuclidean && score < localHeap.peek().getScore()) {
+                            float currentPeekScore = localHeap.peek().getScore();
+                            if (isEuclidean ? (score < currentPeekScore) : (score > currentPeekScore)) {
                                 localHeap.poll();
-                                localHeap.offer(candidate);
-                            } else if (!isEuclidean && score > localHeap.peek().getScore()) {
-                                localHeap.poll();
-                                localHeap.offer(candidate);
+                                localHeap.offer(new TopKCandidate(offset, score));
                             }
                         }
                     }
@@ -455,6 +521,41 @@ public class LocalVectorStore {
             count++;
         }
         return new DeleteResult(count);
+    }
+
+    /**
+     * Returns document payloads in insertion-offset order. Vectors are intentionally omitted
+     * because a management list should not transfer potentially large vector arrays.
+     */
+    public synchronized VectorDocumentPage listDocuments(int page, int size) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 100));
+        int total = getActiveCount();
+        int start = safePage * safeSize;
+        if (start >= total) {
+            return new VectorDocumentPage(Collections.emptyList(), safePage, safeSize, total);
+        }
+
+        List<VectorDocument> documents = new ArrayList<>(Math.min(safeSize, total - start));
+        int seen = 0;
+        int totalCount = getVectorBufferSize();
+        for (int offset = 0; offset < totalCount && documents.size() < safeSize; offset++) {
+            if (deletedBitSet.isDeleted(offset)) {
+                continue;
+            }
+            if (seen++ < start) {
+                continue;
+            }
+            DocumentPayload payload = payloadStorage.get(offset);
+            String id = payload != null ? payload.getId() : idOffsetIndex.getId(offset);
+            if (id != null) {
+                documents.add(new VectorDocument(id,
+                        null,
+                        payload != null ? payload.getText() : null,
+                        payload != null ? payload.getMetadata() : null));
+            }
+        }
+        return new VectorDocumentPage(documents, safePage, safeSize, total);
     }
 
     public VectorStoreStats getStats() {

@@ -10,7 +10,6 @@ import veclite.model.VectorDocument;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -71,14 +70,17 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
             try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(vectorsBinFile)))) {
                 int activeCount = store.getActiveCount();
                 int dimension = store.getDefinition().getDimension();
-                boolean isSQ8 = store.isSQ8Enabled();
+                // 仅当 SQ8 参数已冻结时才以 SQ8 格式落盘；校准预热期(未冻结)退化为 Float32 格式，
+                // 加载后重新走校准流程，保证量化参数始终来自完整统计
+                boolean isSQ8 = store.isSQ8Enabled() && store.isSQ8Frozen();
                 dos.writeInt(activeCount);
                 dos.writeInt(dimension);
                 dos.writeBoolean(isSQ8);
 
                 if (isSQ8) {
-                    dos.writeFloat(store.getSQ8Min());
-                    dos.writeFloat(store.getSQ8Max());
+                    // 逐维度量化参数原样落盘，恢复时不经过任何重新计算
+                    writeFloatArray(dos, store.getSQ8MinPerDim());
+                    writeFloatArray(dos, store.getSQ8ScalePerDim());
                     byte[] tempByteVec = new byte[dimension];
                     int totalCount = getStoreVectorSize(store);
                     for (int offset = 0; offset < totalCount; offset++) {
@@ -120,15 +122,15 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
                 }
             }
 
-            // 5. 原子替换 (ATOMIC_MOVE) 目标文件，确保文件完整性
-            copyFileAtomic(new File(tmpDir, "store.json"), new File(storeDir, "store.json"));
-            copyFileAtomic(new File(tmpDir, "vectors.bin"), new File(storeDir, "vectors.bin"));
-            copyFileAtomic(new File(tmpDir, "documents.jsonl"), new File(storeDir, "documents.jsonl"));
-
-            // 6. 清理临时目录
-            deleteDirectory(tmpDir);
+            // 5. 目录级原子交换：整目录替换，杜绝"三个文件写到一半崩溃导致新旧数据混搭"
+            swapDirectoryAtomic(tmpDir, storeDir, storeName);
         } catch (Exception e) {
             throw new RuntimeException("Failed to save snapshot for store [" + storeName + "]: " + e.getMessage(), e);
+        } finally {
+            // 清理可能残留的临时目录
+            if (tmpDir.exists()) {
+                deleteDirectory(tmpDir);
+            }
         }
     }
 
@@ -152,13 +154,16 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
         }
 
         try {
-            // 1. 校验定义与维度
+            // 1. 校验定义与维度（校验失败直接抛出，不触碰内存中的现有数据）
             VectorStoreDefinition loadedDef = objectMapper.readValue(storeJsonFile, VectorStoreDefinition.class);
             if (loadedDef.getDimension() != store.getDefinition().getDimension()) {
                 throw new IllegalStateException("Snapshot dimension mismatch for [" + storeName + "]. Expected: " + store.getDefinition().getDimension() + ", found: " + loadedDef.getDimension());
             }
 
-            // 2. 读取 documents.jsonl
+            // 2. 重置内存状态后再加载，防止快照之外的旧数据残留
+            store.reset();
+
+            // 3. 读取 documents.jsonl
             List<VectorDocument> docs = new ArrayList<>();
             try (BufferedReader reader = new BufferedReader(new FileReader(docsFile, StandardCharsets.UTF_8))) {
                 String line;
@@ -175,7 +180,7 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
                 }
             }
 
-            // 3. 读取 vectors.bin 并拼装还原写入 store (upsert)
+            // 4. 读取 vectors.bin 并拼装还原写入 store
             int dimension = store.getDefinition().getDimension();
             try (DataInputStream dis = new DataInputStream(new BufferedInputStream(new FileInputStream(vectorsBinFile)))) {
                 int activeCount = dis.readInt();
@@ -186,19 +191,15 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
                 boolean isSQ8 = dis.readBoolean();
 
                 if (isSQ8) {
-                    float min = dis.readFloat();
-                    float max = dis.readFloat();
-                    store.setSQ8MinMax(min, max);
+                    // 逐维度量化参数直接注入，随后以原始量化字节恢复，不做任何反量化/重量化往返
+                    float[] minPerDim = readFloatArray(dis, dimension);
+                    float[] scalePerDim = readFloatArray(dis, dimension);
+                    store.restoreFrozenParams(minPerDim, scalePerDim);
 
                     byte[] byteVec = new byte[dimension];
-                    float[] floatVec = new float[dimension];
                     for (int i = 0; i < activeCount && i < docs.size(); i++) {
                         dis.readFully(byteVec);
-                        // 反量化还原 float 向量供 upsert 消费
-                        veclite.quantization.SQ8Quantizer.dequantize(byteVec, min, max, floatVec);
-                        VectorDocument doc = docs.get(i);
-                        doc.setVector(floatVec);
-                        store.upsert(doc);
+                        store.restoreDocumentWithSQ8(docs.get(i), byteVec);
                     }
                 } else {
                     for (int i = 0; i < activeCount && i < docs.size(); i++) {
@@ -248,10 +249,55 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
     }
 
     /**
-     * 利用 Files.copy 实现物理文件覆盖替换 (REPLACE_EXISTING)。
+     * 目录级原子交换：
+     * 1. 将旧目录重命名为 storeName.bak（原子操作）
+     * 2. 将临时目录重命名为正式目录（原子操作）
+     * 3. 删除 .bak
+     * 任何一步失败都会尝试回滚旧目录，保证磁盘上始终存在一份完整可用的快照。
      */
-    private void copyFileAtomic(File src, File dest) throws IOException {
-        Files.copy(src.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
+    private void swapDirectoryAtomic(File tmpDir, File storeDir, String storeName) throws IOException {
+        File bakDir = new File(storeDir.getParentFile(), storeName + ".bak");
+        if (bakDir.exists()) {
+            deleteDirectory(bakDir);
+        }
+        boolean movedOld = false;
+        if (storeDir.exists()) {
+            Files.move(storeDir.toPath(), bakDir.toPath());
+            movedOld = true;
+        }
+        try {
+            Files.move(tmpDir.toPath(), storeDir.toPath());
+        } catch (IOException moveEx) {
+            // 回滚：把旧目录移回原位
+            if (movedOld && !storeDir.exists()) {
+                Files.move(bakDir.toPath(), storeDir.toPath());
+            }
+            throw moveEx;
+        }
+        if (movedOld) {
+            deleteDirectory(bakDir);
+        }
+    }
+
+    private void writeFloatArray(DataOutputStream dos, float[] values) throws IOException {
+        dos.writeInt(values != null ? values.length : 0);
+        if (values != null) {
+            for (float v : values) {
+                dos.writeFloat(v);
+            }
+        }
+    }
+
+    private float[] readFloatArray(DataInputStream dis, int expectedLength) throws IOException {
+        int length = dis.readInt();
+        if (length != expectedLength) {
+            throw new IllegalStateException("Quantization params length mismatch. Expected: " + expectedLength + ", found: " + length);
+        }
+        float[] values = new float[length];
+        for (int i = 0; i < length; i++) {
+            values[i] = dis.readFloat();
+        }
+        return values;
     }
 
     private int getStoreVectorSize(LocalVectorStore store) {

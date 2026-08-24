@@ -11,7 +11,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /**
- * 单个向量库（Vector Store）的核心实现类 (V2.3 升级版)。
+ * 单个向量库（Vector Store）的核心实现类 (V2.4 升级版)。
  * <p>
  * 支持：
  * 1. 向量缓冲区 (Float32 FloatVectorBuffer / In-Heap SQ8 / Off-Heap SQ8 OffHeapSQ8Buffer)
@@ -19,8 +19,15 @@ import java.util.concurrent.*;
  * 3. 软删除标记位图 (DeletedBitSet)
  * 4. 倒排位图索引中心 (MetadataFilterIndex)
  * 5. 延迟加载/内存 Payload 存储 (CompactPayloadStorage / MMapPayloadStorage)
+ * 6. Per-Dimension 校准冻结式 SQ8 量化（前 N 条向量校准统计后冻结参数，杜绝量化漂移）
  */
 public class LocalVectorStore {
+
+    /**
+     * SQ8 量化参数校准样本数：前 N 条向量以 Float32 暂存用于统计逐维度 min/max，
+     * 达到该数量后一次性量化并冻结量化参数（约占用 N × dim × 4 字节临时内存）。
+     */
+    private static final int SQ8_CALIBRATION_SIZE = 1024;
 
     private final VectorStoreDefinition definition;
     private final VectorLiteProperties properties;
@@ -35,11 +42,25 @@ public class LocalVectorStore {
     private final boolean sq8Enabled;
     private final boolean offHeapEnabled;
     private final OffHeapSQ8Buffer offHeapSQ8Buffer;
+
+    /** 堆内 SQ8 平铺向量数据（off-heap 关闭时使用） */
     private volatile byte[] sq8Data;
     private int sq8Capacity;
     private int sq8Size;
-    private float sq8Min = Float.MAX_VALUE;
-    private float sq8Max = -Float.MAX_VALUE;
+
+    /** 逐维度量化参数（冻结后不可变） */
+    private volatile float[] sq8MinPerDim;
+    private volatile float[] sq8ScalePerDim;
+
+    /** 量化参数是否已冻结；volatile 保证搜索线程立即可见 */
+    private volatile boolean sq8Frozen;
+
+    /** 已存向量的预计算 L2 范数缓存（下标与 Offset 对齐） */
+    private float[] sq8Norms;
+
+    /** 校准阶段暂存的原始 Float32 向量（冻结后释放置空） */
+    private volatile float[] calibrationVectors;
+    private int calibrationCount;
 
     public static class DocumentPayload {
         private String id;
@@ -101,13 +122,65 @@ public class LocalVectorStore {
                 this.sq8Data = new byte[this.sq8Capacity * definition.getDimension()];
             }
             this.sq8Size = 0;
+            this.sq8Frozen = false;
+            this.sq8MinPerDim = null;
+            this.sq8ScalePerDim = null;
+            this.sq8Norms = new float[Math.max(getFreezeTarget(), 16)];
+            this.calibrationVectors = new float[getFreezeTarget() * definition.getDimension()];
+            this.calibrationCount = 0;
             this.vectorBuffer = null;
         } else {
             this.sq8Enabled = false;
             this.offHeapEnabled = false;
             this.offHeapSQ8Buffer = null;
+            this.sq8Frozen = false;
+            this.sq8MinPerDim = null;
+            this.sq8ScalePerDim = null;
+            this.sq8Norms = null;
+            this.calibrationVectors = null;
+            this.calibrationCount = 0;
             this.vectorBuffer = new FloatVectorBuffer(definition.getDimension(), 1024);
         }
+    }
+
+    /**
+     * 重置 Store 全部内存状态（reload 重载快照前调用），回到初始空 Store。
+     * 防止 reload 时磁盘快照之外的旧文档、倒排索引与软删除标记残留。
+     */
+    public synchronized void reset() {
+        idOffsetIndex.clear();
+        deletedBitSet.clear();
+        metadataFilterIndex.clear();
+        payloadStorage.clear();
+        if (!sq8Enabled) {
+            if (vectorBuffer != null) {
+                vectorBuffer.clear();
+            }
+        } else {
+            sq8Frozen = false;
+            sq8MinPerDim = null;
+            sq8ScalePerDim = null;
+            sq8Size = 0;
+            calibrationVectors = new float[getFreezeTarget() * definition.getDimension()];
+            calibrationCount = 0;
+            if (sq8Norms != null) {
+                Arrays.fill(sq8Norms, 0.0f);
+            }
+            if (offHeapSQ8Buffer != null) {
+                offHeapSQ8Buffer.clear();
+            }
+        }
+    }
+
+    /**
+     * 冻结阈值：校准样本数与最大容量取小者（小容量 Store 在写满时立即冻结）。
+     */
+    private int getFreezeTarget() {
+        int maxCapacity = definition.getMaxCapacity();
+        if (maxCapacity <= 0) {
+            return SQ8_CALIBRATION_SIZE;
+        }
+        return Math.min(SQ8_CALIBRATION_SIZE, maxCapacity);
     }
 
     public synchronized void upsert(VectorDocument document) {
@@ -123,33 +196,44 @@ public class LocalVectorStore {
         Integer existingOffset = idOffsetIndex.getOffset(id);
 
         if (sq8Enabled) {
-            updateSQ8MinMax(vector);
-            int dim = definition.getDimension();
-            byte[] quantized = new byte[dim];
-            SQ8Quantizer.quantize(vector, sq8Min, sq8Max, quantized);
-
             if (existingOffset != null) {
-                if (offHeapEnabled && offHeapSQ8Buffer != null) {
-                    offHeapSQ8Buffer.updateAt(existingOffset, quantized);
+                int dim = definition.getDimension();
+                if (!sq8Frozen) {
+                    // 校准阶段：原地覆盖暂存区的原始向量
+                    System.arraycopy(vector, 0, calibrationVectors, existingOffset * dim, dim);
                 } else {
-                    System.arraycopy(quantized, 0, sq8Data, existingOffset * dim, dim);
+                    byte[] quantized = new byte[dim];
+                    SQ8Quantizer.quantize(vector, sq8MinPerDim, sq8ScalePerDim, quantized);
+                    writeQuantizedAt(existingOffset, quantized);
+                    sq8Norms[existingOffset] = quantizedNorm(quantized);
                 }
                 deletedBitSet.unmark(existingOffset);
-                payloadStorage.put(existingOffset, id, document.getText(), document.getMetadata());
+                // 先按旧 Metadata 清除倒排位图，再写入新值，防止旧字段值残留导致过滤结果错误
+                Map<String, Object> oldMetadata = payloadStorage.getMetadata(existingOffset);
+                metadataFilterIndex.removeDocument(existingOffset, oldMetadata);
                 metadataFilterIndex.indexDocument(existingOffset, document.getMetadata());
+                payloadStorage.put(existingOffset, id, document.getText(), document.getMetadata());
             } else {
                 if (getActiveCount() >= definition.getMaxCapacity()) {
                     throw new IllegalStateException("Vector store [" + definition.getStoreName() + "] reached max capacity limit: " + definition.getMaxCapacity());
                 }
                 int newOffset;
-                if (offHeapEnabled && offHeapSQ8Buffer != null) {
-                    newOffset = offHeapSQ8Buffer.append(quantized);
-                    sq8Size = offHeapSQ8Buffer.getSize();
+                if (!sq8Frozen) {
+                    // 校准阶段：追加至暂存区，达到阈值后统一量化并冻结参数
+                    newOffset = calibrationCount++;
+                    System.arraycopy(vector, 0, calibrationVectors, newOffset * definition.getDimension(), definition.getDimension());
+                    ensureNormsCapacity(newOffset + 1);
+                    sq8Norms[newOffset] = 0.0f;
+                    if (calibrationCount >= getFreezeTarget()) {
+                        freezeSQ8();
+                    }
                 } else {
-                    ensureSQ8Capacity(sq8Size + 1);
-                    newOffset = sq8Size;
-                    System.arraycopy(quantized, 0, sq8Data, newOffset * dim, dim);
-                    sq8Size++;
+                    int dim = definition.getDimension();
+                    byte[] quantized = new byte[dim];
+                    SQ8Quantizer.quantize(vector, sq8MinPerDim, sq8ScalePerDim, quantized);
+                    newOffset = appendQuantized(quantized);
+                    ensureNormsCapacity(newOffset + 1);
+                    sq8Norms[newOffset] = quantizedNorm(quantized);
                 }
                 idOffsetIndex.put(id, newOffset);
                 payloadStorage.put(newOffset, id, document.getText(), document.getMetadata());
@@ -159,8 +243,11 @@ public class LocalVectorStore {
             if (existingOffset != null) {
                 vectorBuffer.updateAt(existingOffset, vector);
                 deletedBitSet.unmark(existingOffset);
-                payloadStorage.put(existingOffset, id, document.getText(), document.getMetadata());
+                // 先按旧 Metadata 清除倒排位图，再写入新值，防止旧字段值残留导致过滤结果错误
+                Map<String, Object> oldMetadata = payloadStorage.getMetadata(existingOffset);
+                metadataFilterIndex.removeDocument(existingOffset, oldMetadata);
                 metadataFilterIndex.indexDocument(existingOffset, document.getMetadata());
+                payloadStorage.put(existingOffset, id, document.getText(), document.getMetadata());
             } else {
                 if (getActiveCount() >= definition.getMaxCapacity()) {
                     throw new IllegalStateException("Vector store [" + definition.getStoreName() + "] reached max capacity limit: " + definition.getMaxCapacity());
@@ -173,10 +260,92 @@ public class LocalVectorStore {
         }
     }
 
-    private void updateSQ8MinMax(float[] vector) {
-        for (float v : vector) {
-            if (v < sq8Min) sq8Min = v;
-            if (v > sq8Max) sq8Max = v;
+    /**
+     * 统计校准暂存区内所有向量的逐维度 min/max，生成量化参数并全量量化，
+     * 随后释放暂存区并冻结参数。必须在持有 Store 写锁（synchronized upsert）时调用。
+     */
+    private void freezeSQ8() {
+        int dim = definition.getDimension();
+        int n = calibrationCount;
+
+        float[] minP = new float[dim];
+        float[] maxP = new float[dim];
+        Arrays.fill(minP, Float.MAX_VALUE);
+        Arrays.fill(maxP, -Float.MAX_VALUE);
+        for (int r = 0; r < n; r++) {
+            int base = r * dim;
+            for (int d = 0; d < dim; d++) {
+                float v = calibrationVectors[base + d];
+                if (v < minP[d]) minP[d] = v;
+                if (v > maxP[d]) maxP[d] = v;
+            }
+        }
+        float[] scaleP = new float[dim];
+        for (int d = 0; d < dim; d++) {
+            float range = maxP[d] - minP[d];
+            if (range < 1e-7f) range = 1e-7f;
+            scaleP[d] = range / 255.0f;
+        }
+
+        // 参数先就绪，再批量量化（搜索线程在 frozen 置位前仍走暂存区 Float32 精确扫描）
+        this.sq8MinPerDim = minP;
+        this.sq8ScalePerDim = scaleP;
+
+        float[] row = new float[dim];
+        byte[] quantized = new byte[dim];
+        for (int r = 0; r < n; r++) {
+            int base = r * dim;
+            System.arraycopy(calibrationVectors, base, row, 0, dim);
+            SQ8Quantizer.quantize(row, minP, scaleP, quantized);
+            int newOffset = appendQuantized(quantized);
+            ensureNormsCapacity(newOffset + 1);
+            sq8Norms[newOffset] = quantizedNorm(quantized);
+        }
+
+        this.calibrationVectors = null;
+        this.sq8Frozen = true;
+    }
+
+    /**
+     * 从量化字节（经反量化后的存储表示）计算 L2 范数。
+     * 范数缓存必须与打分时使用的量化表示一致，否则发生 clamp 的向量会因范数失真导致得分错误。
+     */
+    private float quantizedNorm(byte[] quantized) {
+        int dim = definition.getDimension();
+        float[] restored = new float[dim];
+        SQ8Quantizer.dequantize(quantized, sq8MinPerDim, sq8ScalePerDim, restored);
+        return SQ8Quantizer.l2Norm(restored);
+    }
+
+    private void writeQuantizedAt(int offset, byte[] quantized) {
+        int dim = definition.getDimension();
+        if (offHeapEnabled && offHeapSQ8Buffer != null) {
+            offHeapSQ8Buffer.updateAt(offset, quantized);
+        } else {
+            System.arraycopy(quantized, 0, sq8Data, offset * dim, dim);
+        }
+    }
+
+    private int appendQuantized(byte[] quantized) {
+        int dim = definition.getDimension();
+        int newOffset;
+        if (offHeapEnabled && offHeapSQ8Buffer != null) {
+            newOffset = offHeapSQ8Buffer.append(quantized);
+        } else {
+            ensureSQ8Capacity(sq8Size + 1);
+            System.arraycopy(quantized, 0, sq8Data, sq8Size * dim, dim);
+            newOffset = sq8Size;
+        }
+        sq8Size++;
+        return newOffset;
+    }
+
+    private void ensureNormsCapacity(int minCapacity) {
+        if (sq8Norms == null || sq8Norms.length < minCapacity) {
+            int oldLen = sq8Norms != null ? sq8Norms.length : 16;
+            int newLen = oldLen + (oldLen >> 1);
+            if (newLen < minCapacity) newLen = minCapacity;
+            sq8Norms = Arrays.copyOf(sq8Norms != null ? sq8Norms : new float[16], newLen);
         }
     }
 
@@ -206,97 +375,70 @@ public class LocalVectorStore {
         FilterExpression filter = request.getFilter();
 
         boolean isEuclidean = "EUCLIDEAN".equalsIgnoreCase(metric) || "L2".equalsIgnoreCase(metric);
-        int totalCount = sq8Enabled ? (offHeapEnabled ? offHeapSQ8Buffer.getSize() : sq8Size) : vectorBuffer.getSize();
+        boolean isDotProduct = "DOT_PRODUCT".equalsIgnoreCase(metric) || "IP".equalsIgnoreCase(metric);
+
+        // 三种扫描模式：Float32 缓冲区 / SQ8 量化缓冲区 / SQ8 校准期 Float32 暂存区。
+        // 所有可变状态在入口处一次性捕获为局部快照引用，
+        // 防止写线程在校准冻结瞬间置空暂存区导致检索线程 NPE。
+        boolean sq8Scan = false;
+        boolean warmupScan = false;
+        int totalCount;
+        float[] calibSnapshot = null;
+        if (!sq8Enabled) {
+            totalCount = vectorBuffer.getSize();
+        } else if (sq8Frozen) {
+            sq8Scan = true;
+            totalCount = sq8Size;
+        } else {
+            calibSnapshot = calibrationVectors;
+            if (calibSnapshot == null) {
+                // 冻结恰好发生在两次读取之间，退化为量化扫描
+                sq8Scan = true;
+                totalCount = sq8Size;
+            } else {
+                warmupScan = true;
+                totalCount = calibrationCount;
+            }
+        }
+
+        // 查询向量范数整次搜索仅计算一次
+        float queryNormSq = 0.0f;
+        float queryNormInv = 0.0f;
+        if (sq8Scan) {
+            for (float v : queryVector) {
+                queryNormSq += v * v;
+            }
+            queryNormInv = queryNormSq > 0.0f ? 1.0f / (float) Math.sqrt(queryNormSq) : 0.0f;
+        }
 
         boolean enableParallel = properties != null && properties.getSearcher().getParallel().isEnabled()
                 && totalCount >= properties.getSearcher().getParallel().getMinVectorCount();
 
         if (enableParallel) {
-            return searchParallel(request, queryVector, topK, minScore, metric, filter, isEuclidean, totalCount);
-        } else {
-            return searchSequential(request, queryVector, topK, minScore, metric, filter, isEuclidean, totalCount);
+            return searchParallel(queryVector, topK, minScore, metric, filter, isEuclidean, isDotProduct,
+                    totalCount, sq8Scan, warmupScan, queryNormSq, queryNormInv, calibSnapshot);
         }
-    }
-
-    private List<VectorSearchResult> searchSequential(VectorSearchRequest request, float[] queryVector, int topK,
-                                                       Float minScore, String metric, FilterExpression filter,
-                                                       boolean isEuclidean, int totalCount) {
-        PriorityQueue<TopKCandidate> heap = new PriorityQueue<>(topK, isEuclidean ?
-                Comparator.comparingDouble(TopKCandidate::getScore).reversed() :
-                Comparator.comparingDouble(TopKCandidate::getScore));
-
-        BitSet matchingBitSet = metadataFilterIndex.evaluate(filter);
 
         if (!sq8Enabled && vectorBuffer != null) {
             vectorBuffer.acquireReadLock();
         }
         try {
-            int dim = definition.getDimension();
-            byte[] targetBytes = sq8Enabled ? new byte[dim] : null;
-
-            for (int offset = 0; offset < totalCount; offset++) {
-                if (deletedBitSet.isDeleted(offset)) continue;
-
-                if (matchingBitSet != null && !matchingBitSet.get(offset)) {
-                    continue;
-                }
-                if (matchingBitSet == null && filter != null) {
-                    Map<String, Object> metadata = payloadStorage.getMetadata(offset);
-                    if (!matchesFilter(metadata, filter)) continue;
-                }
-
-                float score;
-                if (sq8Enabled) {
-                    if (offHeapEnabled && offHeapSQ8Buffer != null) {
-                        offHeapSQ8Buffer.copyVectorTo(offset, targetBytes);
-                    } else {
-                        System.arraycopy(sq8Data, offset * dim, targetBytes, 0, dim);
-                    }
-                    score = SQ8Quantizer.calculateCosine(queryVector, targetBytes, sq8Min, sq8Max);
-                } else {
-                    score = vectorBuffer.calculateScoreZeroCopy(vectorMath, metric, queryVector, offset);
-                }
-
-                if (minScore != null) {
-                    if (isEuclidean && score > minScore) continue;
-                    else if (!isEuclidean && score < minScore) continue;
-                }
-
-                TopKCandidate candidate = new TopKCandidate(offset, score);
-                if (heap.size() < topK) {
-                    heap.offer(candidate);
-                } else if (heap.peek() != null) {
-                    if (isEuclidean && score < heap.peek().getScore()) {
-                        heap.poll();
-                        heap.offer(candidate);
-                    } else if (!isEuclidean && score > heap.peek().getScore()) {
-                        heap.poll();
-                        heap.offer(candidate);
-                    }
-                }
-            }
+            List<TopKCandidate> candidates = doSearch(queryVector, topK, minScore, metric, filter, isEuclidean, isDotProduct,
+                    0, totalCount, sq8Scan, warmupScan, queryNormSq, queryNormInv, calibSnapshot, null);
+            return buildResults(candidates);
         } finally {
             if (!sq8Enabled && vectorBuffer != null) {
                 vectorBuffer.releaseReadLock();
             }
         }
-
-        List<VectorSearchResult> results = new ArrayList<>(heap.size());
-        while (!heap.isEmpty()) {
-            TopKCandidate cand = heap.poll();
-            DocumentPayload payload = payloadStorage.get(cand.offset);
-            String id = payload != null ? payload.getId() : idOffsetIndex.getId(cand.offset);
-            String text = payload != null ? payload.getText() : null;
-            Map<String, Object> metadata = payload != null ? payload.getMetadata() : null;
-            results.add(new VectorSearchResult(id, cand.score, text, metadata));
-        }
-        Collections.reverse(results);
-        return results;
     }
 
-    private List<VectorSearchResult> searchParallel(VectorSearchRequest request, float[] queryVector, int topK,
-                                                     Float minScore, String metric, FilterExpression filter,
-                                                     boolean isEuclidean, int totalCount) {
+    private List<VectorSearchResult> searchParallel(float[] queryVector, int topK,
+                                                    Float minScore, String metric, FilterExpression filter,
+                                                    boolean isEuclidean, boolean isDotProduct, int totalCount,
+                                                    boolean sq8Scan, boolean warmupScan,
+                                                    float queryNormSq, float queryNormInv,
+                                                    float[] calibSnapshot) {
         int threads = properties.getSearcher().getParallel().getThreads();
         ExecutorService executor = ParallelSearchExecutor.getExecutor(threads);
 
@@ -316,95 +458,22 @@ public class LocalVectorStore {
 
                 if (startOffset >= totalCount) break;
 
-                futures.add(executor.submit(() -> {
-                    PriorityQueue<TopKCandidate> localHeap = new PriorityQueue<>(topK, isEuclidean ?
-                            Comparator.comparingDouble(TopKCandidate::getScore).reversed() :
-                            Comparator.comparingDouble(TopKCandidate::getScore));
-
-                    byte[] localSQ8Bytes = sq8Enabled ? new byte[dim] : null;
-
-                    for (int offset = startOffset; offset < endOffset; offset++) {
-                        if (deletedBitSet.isDeleted(offset)) continue;
-
-                        if (matchingBitSet != null && !matchingBitSet.get(offset)) {
-                            continue;
-                        }
-                        if (matchingBitSet == null && filter != null) {
-                            Map<String, Object> metadata = payloadStorage.getMetadata(offset);
-                            if (!matchesFilter(metadata, filter)) continue;
-                        }
-
-                        float score;
-                        if (sq8Enabled) {
-                            if (offHeapEnabled && offHeapSQ8Buffer != null) {
-                                offHeapSQ8Buffer.copyVectorTo(offset, localSQ8Bytes);
-                            } else {
-                                System.arraycopy(sq8Data, offset * dim, localSQ8Bytes, 0, dim);
-                            }
-                            score = SQ8Quantizer.calculateCosine(queryVector, localSQ8Bytes, sq8Min, sq8Max);
-                        } else {
-                            score = vectorBuffer.calculateScoreZeroCopy(vectorMath, metric, queryVector, offset);
-                        }
-
-                        if (minScore != null) {
-                            if (isEuclidean && score > minScore) continue;
-                            else if (!isEuclidean && score < minScore) continue;
-                        }
-
-                        TopKCandidate candidate = new TopKCandidate(offset, score);
-                        if (localHeap.size() < topK) {
-                            localHeap.offer(candidate);
-                        } else if (localHeap.peek() != null) {
-                            if (isEuclidean && score < localHeap.peek().getScore()) {
-                                localHeap.poll();
-                                localHeap.offer(candidate);
-                            } else if (!isEuclidean && score > localHeap.peek().getScore()) {
-                                localHeap.poll();
-                                localHeap.offer(candidate);
-                            }
-                        }
-                    }
-
-                    List<TopKCandidate> chunkResults = new ArrayList<>(localHeap.size());
-                    while (!localHeap.isEmpty()) {
-                        chunkResults.add(localHeap.poll());
-                    }
-                    return chunkResults;
-                }));
+                futures.add(executor.submit(() ->
+                        doSearch(queryVector, topK, minScore, metric, filter, isEuclidean, isDotProduct,
+                                startOffset, endOffset, sq8Scan, warmupScan, queryNormSq, queryNormInv,
+                                calibSnapshot, matchingBitSet)));
             }
 
-            PriorityQueue<TopKCandidate> globalHeap = new PriorityQueue<>(topK, isEuclidean ?
-                    Comparator.comparingDouble(TopKCandidate::getScore).reversed() :
-                    Comparator.comparingDouble(TopKCandidate::getScore));
+            PriorityQueue<TopKCandidate> globalHeap = newPriorityQueue(topK, isEuclidean);
 
             for (Future<List<TopKCandidate>> future : futures) {
                 List<TopKCandidate> chunkList = future.get();
                 for (TopKCandidate res : chunkList) {
-                    if (globalHeap.size() < topK) {
-                        globalHeap.offer(res);
-                    } else if (globalHeap.peek() != null) {
-                        if (isEuclidean && res.getScore() < globalHeap.peek().getScore()) {
-                            globalHeap.poll();
-                            globalHeap.offer(res);
-                        } else if (!isEuclidean && res.getScore() > globalHeap.peek().getScore()) {
-                            globalHeap.poll();
-                            globalHeap.offer(res);
-                        }
-                    }
+                    offerCandidate(globalHeap, res, topK, isEuclidean);
                 }
             }
 
-            List<VectorSearchResult> results = new ArrayList<>(globalHeap.size());
-            while (!globalHeap.isEmpty()) {
-                TopKCandidate cand = globalHeap.poll();
-                DocumentPayload payload = payloadStorage.get(cand.offset);
-                String id = payload != null ? payload.getId() : idOffsetIndex.getId(cand.offset);
-                String text = payload != null ? payload.getText() : null;
-                Map<String, Object> metadata = payload != null ? payload.getMetadata() : null;
-                results.add(new VectorSearchResult(id, cand.score, text, metadata));
-            }
-            Collections.reverse(results);
-            return results;
+            return buildResults(pollAll(globalHeap));
         } catch (Exception e) {
             throw new RuntimeException("Parallel search failed: " + e.getMessage(), e);
         } finally {
@@ -412,6 +481,123 @@ public class LocalVectorStore {
                 vectorBuffer.releaseReadLock();
             }
         }
+    }
+
+    /**
+     * 在 [fromOffset, toOffset) 区间内扫描打分并返回候选列表（按 poll 顺序，即从差到好排列）。
+     * fromOffset=0 且 toOffset=totalCount 时等价于顺序全量扫描。
+     */
+    private List<TopKCandidate> doSearch(float[] queryVector, int topK,
+                                         Float minScore, String metric, FilterExpression filter,
+                                         boolean isEuclidean, boolean isDotProduct,
+                                         int fromOffset, int toOffset,
+                                         boolean sq8Scan, boolean warmupScan,
+                                         float queryNormSq, float queryNormInv,
+                                         float[] calibSnapshot,
+                                         BitSet precomputedMatchingBitSet) {
+        PriorityQueue<TopKCandidate> heap = newPriorityQueue(topK, isEuclidean);
+
+        BitSet matchingBitSet = precomputedMatchingBitSet != null
+                ? precomputedMatchingBitSet : metadataFilterIndex.evaluate(filter);
+
+        final int dim = definition.getDimension();
+        final float[] minPerDim = sq8Scan ? sq8MinPerDim : null;
+        final float[] scalePerDim = sq8Scan ? sq8ScalePerDim : null;
+        final float[] norms = sq8Scan ? sq8Norms : null;
+        final byte[] sq8HeapData = (sq8Scan && !offHeapEnabled) ? sq8Data : null;
+        final byte[] sq8Bytes = sq8Scan && offHeapEnabled ? new byte[dim] : null;
+
+        for (int offset = fromOffset; offset < toOffset; offset++) {
+            if (deletedBitSet.isDeleted(offset)) continue;
+
+            if (matchingBitSet != null && !matchingBitSet.get(offset)) {
+                continue;
+            }
+            if (matchingBitSet == null && filter != null) {
+                Map<String, Object> metadata = payloadStorage.getMetadata(offset);
+                if (!matchesFilter(metadata, filter)) continue;
+            }
+
+            float score;
+            if (warmupScan) {
+                // 校准阶段：直接在 Float32 暂存区快照上做精确计算
+                score = vectorMath.calculate(metric, queryVector, calibSnapshot, offset * dim, dim);
+            } else if (sq8Scan) {
+                byte[] srcArr;
+                int srcOff;
+                if (sq8Bytes != null) {
+                    offHeapSQ8Buffer.copyVectorTo(offset, sq8Bytes);
+                    srcArr = sq8Bytes;
+                    srcOff = 0;
+                } else {
+                    srcArr = sq8HeapData;
+                    srcOff = offset * dim;
+                }
+                float norm = norms[offset];
+                if (isEuclidean) {
+                    score = SQ8Quantizer.calculateEuclideanWithNorms(queryVector, srcArr, srcOff,
+                            minPerDim, scalePerDim, queryNormSq, norm * norm);
+                } else if (isDotProduct) {
+                    score = SQ8Quantizer.calculateDotProduct(queryVector, srcArr, srcOff,
+                            minPerDim, scalePerDim);
+                } else {
+                    float normInv = norm > 0.0f ? 1.0f / norm : 0.0f;
+                    score = SQ8Quantizer.calculateCosineWithNorms(queryVector, srcArr, srcOff,
+                            minPerDim, scalePerDim, queryNormInv, normInv);
+                }
+            } else {
+                score = vectorBuffer.calculateScoreZeroCopy(vectorMath, metric, queryVector, offset);
+            }
+
+            if (minScore != null) {
+                if (isEuclidean && score > minScore) continue;
+                else if (!isEuclidean && score < minScore) continue;
+            }
+
+            offerCandidate(heap, new TopKCandidate(offset, score), topK, isEuclidean);
+        }
+
+        return pollAll(heap);
+    }
+
+    private PriorityQueue<TopKCandidate> newPriorityQueue(int topK, boolean isEuclidean) {
+        return new PriorityQueue<>(topK, isEuclidean ?
+                Comparator.comparingDouble(TopKCandidate::getScore).reversed() :
+                Comparator.comparingDouble(TopKCandidate::getScore));
+    }
+
+    private void offerCandidate(PriorityQueue<TopKCandidate> heap, TopKCandidate candidate, int topK, boolean isEuclidean) {
+        if (heap.size() < topK) {
+            heap.offer(candidate);
+        } else if (heap.peek() != null) {
+            float peekScore = heap.peek().getScore();
+            boolean better = isEuclidean ? candidate.score < peekScore : candidate.score > peekScore;
+            if (better) {
+                heap.poll();
+                heap.offer(candidate);
+            }
+        }
+    }
+
+    private List<TopKCandidate> pollAll(PriorityQueue<TopKCandidate> heap) {
+        List<TopKCandidate> results = new ArrayList<>(heap.size());
+        while (!heap.isEmpty()) {
+            results.add(heap.poll());
+        }
+        return results;
+    }
+
+    private List<VectorSearchResult> buildResults(List<TopKCandidate> candidates) {
+        List<VectorSearchResult> results = new ArrayList<>(candidates.size());
+        for (int i = candidates.size() - 1; i >= 0; i--) {
+            TopKCandidate cand = candidates.get(i);
+            DocumentPayload payload = payloadStorage.get(cand.offset);
+            String id = payload != null ? payload.getId() : idOffsetIndex.getId(cand.offset);
+            String text = payload != null ? payload.getText() : null;
+            Map<String, Object> metadata = payload != null ? payload.getMetadata() : null;
+            results.add(new VectorSearchResult(id, cand.score, text, metadata));
+        }
+        return results;
     }
 
     public synchronized DeleteResult deleteByIds(List<String> ids) {
@@ -436,7 +622,7 @@ public class LocalVectorStore {
             return new DeleteResult(0);
         }
         int count = 0;
-        int totalCount = sq8Enabled ? (offHeapEnabled ? offHeapSQ8Buffer.getSize() : sq8Size) : vectorBuffer.getSize();
+        int totalCount = getVectorBufferSize();
         BitSet matchingBitSet = metadataFilterIndex.evaluate(filter);
 
         for (int offset = 0; offset < totalCount; offset++) {
@@ -468,6 +654,35 @@ public class LocalVectorStore {
         return stats;
     }
 
+    public synchronized List<VectorDocument> listDocuments(int page, int size, boolean includeVector) {
+        if (page < 1) page = 1;
+        if (size <= 0) size = 20;
+        int skip = (page - 1) * size;
+        int bufferSize = getVectorBufferSize();
+        int dim = definition.getDimension();
+        List<VectorDocument> result = new ArrayList<>();
+        int passed = 0;
+
+        for (int i = 0; i < bufferSize; i++) {
+            if (!isOffsetDeleted(i)) {
+                DocumentPayload payload = getDocumentPayloadAt(i);
+                if (payload != null) {
+                    if (passed >= skip && result.size() < size) {
+                        float[] vec = null;
+                        if (includeVector) {
+                            vec = new float[dim];
+                            copyVectorFromBuffer(i, vec);
+                        }
+                        VectorDocument doc = new VectorDocument(payload.getId(), vec, payload.getText(), payload.getMetadata());
+                        result.add(doc);
+                    }
+                    passed++;
+                }
+            }
+        }
+        return result;
+    }
+
     public int getActiveCount() {
         return idOffsetIndex.size() - deletedBitSet.getDeletedCount();
     }
@@ -496,7 +711,10 @@ public class LocalVectorStore {
     // -- 专门提供给 SnapshotFileStorage 持久化使用的包级访问器 --
 
     public int getVectorBufferSize() {
-        return sq8Enabled ? (offHeapEnabled ? offHeapSQ8Buffer.getSize() : sq8Size) : (vectorBuffer != null ? vectorBuffer.getSize() : 0);
+        if (!sq8Enabled) {
+            return vectorBuffer != null ? vectorBuffer.getSize() : 0;
+        }
+        return sq8Frozen ? sq8Size : calibrationCount;
     }
 
     public boolean isOffsetDeleted(int offset) {
@@ -504,13 +722,15 @@ public class LocalVectorStore {
     }
 
     public void copyVectorFromBuffer(int offset, float[] dest) {
-        if (sq8Enabled) {
-            int dim = definition.getDimension();
+        int dim = definition.getDimension();
+        if (!sq8Enabled) {
+            vectorBuffer.copyVectorTo(offset, dest);
+        } else if (!sq8Frozen) {
+            System.arraycopy(calibrationVectors, offset * dim, dest, 0, dim);
+        } else {
             byte[] bytes = new byte[dim];
             copySQ8VectorFromBuffer(offset, bytes);
-            SQ8Quantizer.dequantize(bytes, sq8Min, sq8Max, dest);
-        } else {
-            vectorBuffer.copyVectorTo(offset, dest);
+            SQ8Quantizer.dequantize(bytes, sq8MinPerDim, sq8ScalePerDim, dest);
         }
     }
 
@@ -533,26 +753,23 @@ public class LocalVectorStore {
 
     public byte[] getSQ8RawData() {
         if (offHeapEnabled && offHeapSQ8Buffer != null) {
-            byte[] data = new byte[offHeapSQ8Buffer.getSize() * definition.getDimension()];
+            byte[] data = new byte[sq8Size * definition.getDimension()];
             offHeapSQ8Buffer.copyAllTo(data);
             return data;
         }
         return sq8Data;
     }
 
-    public float getSQ8Min() { return sq8Min; }
-    public float getSQ8Max() { return sq8Max; }
-    public void setSQ8MinMax(float min, float max) {
-        this.sq8Min = min;
-        this.sq8Max = max;
+    public float[] getSQ8MinPerDim() {
+        return sq8MinPerDim;
     }
 
-    public int getBufferDimension() {
-        return definition.getDimension();
+    public float[] getSQ8ScalePerDim() {
+        return sq8ScalePerDim;
     }
 
-    public long getSQ8DataSizeBytes() {
-        return sq8Enabled ? (long) getVectorBufferSize() * definition.getDimension() : 0;
+    public boolean isSQ8Frozen() {
+        return sq8Frozen;
     }
 
     public boolean isSQ8Enabled() {
@@ -561,6 +778,54 @@ public class LocalVectorStore {
 
     public boolean isOffHeapEnabled() {
         return sq8Enabled && offHeapEnabled;
+    }
+
+    /**
+     * 快照恢复专用：直接注入已冻结的逐维度量化参数（跳过本进程的校准流程）。
+     */
+    public void restoreFrozenParams(float[] minPerDim, float[] scalePerDim) {
+        if (!sq8Enabled) {
+            throw new IllegalStateException("Store [" + definition.getStoreName() + "] is not in SQ8 mode");
+        }
+        if (minPerDim == null || scalePerDim == null || minPerDim.length != definition.getDimension()
+                || scalePerDim.length != definition.getDimension()) {
+            throw new IllegalArgumentException("Invalid per-dimension quantization params");
+        }
+        this.sq8MinPerDim = minPerDim;
+        this.sq8ScalePerDim = scalePerDim;
+        this.calibrationVectors = null;
+        this.calibrationCount = 0;
+        this.sq8Size = 0;
+        this.sq8Frozen = true;
+    }
+
+    /**
+     * 快照恢复专用：将磁盘上的原始 SQ8 量化字节直接入 Buffer，
+     * 不经过"反量化→重新量化"往返，避免多次刷盘/恢复后的精度累积衰减。
+     * 必须先调用 {@link #restoreFrozenParams(float[], float[])}。
+     */
+    public synchronized void restoreDocumentWithSQ8(VectorDocument document, byte[] rawQuantized) {
+        if (!sq8Frozen) {
+            throw new IllegalStateException("Must call restoreFrozenParams before restoring SQ8 documents");
+        }
+        int dim = definition.getDimension();
+        if (rawQuantized == null || rawQuantized.length != dim) {
+            throw new IllegalArgumentException("Raw SQ8 bytes dimension mismatch");
+        }
+        int newOffset = appendQuantized(rawQuantized);
+
+        ensureNormsCapacity(newOffset + 1);
+        float[] restored = new float[dim];
+        SQ8Quantizer.dequantize(rawQuantized, sq8MinPerDim, sq8ScalePerDim, restored);
+        sq8Norms[newOffset] = SQ8Quantizer.l2Norm(restored);
+
+        idOffsetIndex.put(document.getId(), newOffset);
+        payloadStorage.put(newOffset, document.getId(), document.getText(), document.getMetadata());
+        metadataFilterIndex.indexDocument(newOffset, document.getMetadata());
+    }
+
+    public long getSQ8DataSizeBytes() {
+        return sq8Enabled ? (long) getVectorBufferSize() * definition.getDimension() : 0;
     }
 
     public void close() {

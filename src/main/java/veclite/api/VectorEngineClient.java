@@ -22,6 +22,8 @@ public interface VectorEngineClient {
 
     DeleteResult deleteByFilter(String storeName, FilterExpression filter);
 
+    VectorDocumentPage listDocuments(String storeName, int page, int size);
+
     VectorStoreStats stats(String storeName);
 
     void refresh(String storeName);

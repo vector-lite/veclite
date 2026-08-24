@@ -35,10 +35,34 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
 
+// Local vector stores are runtime/generated data. Publishing them would make the SDK
+// artifact several gigabytes and can leave the jar task appearing to hang.
+tasks.processResources {
+    exclude("vec/**")
+}
+
 tasks.withType<Test> {
     useJUnitPlatform()
     minHeapSize = "2g"
     maxHeapSize = "6g"
+}
+
+tasks.register<Test>("v24ResourceBenchmark") {
+    description = "在单核、1 GB 资源预算下运行 Veclite V2.4 容量与性能压测。"
+    group = "verification"
+    useJUnitPlatform()
+    include("**/V24ResourcePerformanceBenchmarkTest.class")
+    minHeapSize = "128m"
+    maxHeapSize = "384m"
+    maxParallelForks = 1
+    systemProperty("veclite.benchmark.scale", providers.gradleProperty("benchmarkScale").getOrElse(""))
+    systemProperty("veclite.benchmark.reportOnly", providers.gradleProperty("benchmarkReportOnly").getOrElse("false"))
+    systemProperty("veclite.benchmark.failure", providers.gradleProperty("benchmarkFailure").getOrElse(""))
+    jvmArgs(
+        "-XX:ActiveProcessorCount=1",
+        "-XX:MaxDirectMemorySize=512m",
+        "-XX:+UseSerialGC"
+    )
 }
 
 publishing {

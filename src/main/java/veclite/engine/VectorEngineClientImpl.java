@@ -165,6 +165,11 @@ public class VectorEngineClientImpl implements VectorEngineClient {
         return store.deleteByFilter(filter);
     }
 
+    @Override
+    public VectorDocumentPage listDocuments(String storeName, int page, int size) {
+        return localVectorEngine.getStore(storeName).listDocuments(page, size);
+    }
+
     /**
      * 获取指定 Store 的容量与配置状态统计信息。
      */
@@ -191,4 +196,3 @@ public class VectorEngineClientImpl implements VectorEngineClient {
         persistence.loadStore(store);
     }
 }
-

@@ -166,6 +166,18 @@ public class FloatVectorBuffer {
         }
     }
 
+    /**
+     * 清空缓冲区（reload 重置用）：仅归零计数，复用已分配数组。
+     */
+    public void clear() {
+        writeLock.lock();
+        try {
+            size = 0;
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
     public int getDimension() {
         return dimension;
     }

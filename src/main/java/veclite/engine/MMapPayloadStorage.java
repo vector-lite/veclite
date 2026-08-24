@@ -42,7 +42,11 @@ public class MMapPayloadStorage implements PayloadStorage {
         this.objectMapper = new ObjectMapper();
 
         try {
-            File dir = new File(basePath, storeName);
+            // 使用独立的 `${storeName}_payload` 目录存放 payload.mmap，
+            // 与 SnapshotFileStorage 的 `${storeName}` 快照目录彻底隔离：
+            // 快照刷盘采用整目录原子交换，若 payload.mmap 混在其中，
+            // Windows 下会因文件句柄占用导致 move 失败，Linux 下会在交换后被物理删除
+            File dir = new File(basePath, storeName + "_payload");
             if (!dir.exists()) {
                 dir.mkdirs();
             }
@@ -155,6 +159,23 @@ public class MMapPayloadStorage implements PayloadStorage {
             Arrays.fill(newPos, capacity, newCapacity, -1L);
             filePositions = newPos;
             capacity = newCapacity;
+        }
+    }
+
+    @Override
+    public void clear() {
+        writeLock.lock();
+        try {
+            Arrays.fill(ids, null);
+            Arrays.fill(filePositions, -1L);
+            if (fileChannel != null && fileChannel.isOpen()) {
+                fileChannel.truncate(0);
+                fileChannel.position(0);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to clear MMap payload storage: " + e.getMessage(), e);
+        } finally {
+            writeLock.unlock();
         }
     }
 

@@ -23,8 +23,11 @@ public class VectorStoreDefinition implements Serializable {
     @Schema(description = "Maximum document capacity", example = "100000")
     private int maxCapacity = 100000;
 
-    @Schema(description = "Embedding model name (from configured models)", example = "text-embedding-ada-002")
+    @Schema(description = "Embedding model name (from configured models). Bound at creation and immutable afterwards", example = "text-embedding-ada-002")
     private String embeddingModel;
+
+    @Schema(description = "Embedding model version. Defaults to the version in model config when omitted. Immutable after store creation", example = "1")
+    private String embeddingModelVersion;
 
     @Schema(description = "Vector quantization type")
     private QuantizationType quantization = QuantizationType.NONE;
@@ -44,6 +47,8 @@ public class VectorStoreDefinition implements Serializable {
     public void setMaxCapacity(int maxCapacity) { this.maxCapacity = maxCapacity; }
     public String getEmbeddingModel() { return embeddingModel; }
     public void setEmbeddingModel(String embeddingModel) { this.embeddingModel = embeddingModel; }
+    public String getEmbeddingModelVersion() { return embeddingModelVersion; }
+    public void setEmbeddingModelVersion(String embeddingModelVersion) { this.embeddingModelVersion = embeddingModelVersion; }
     public QuantizationType getQuantization() { return quantization; }
     public void setQuantization(QuantizationType quantization) { this.quantization = quantization; }
     public List<String> getIndexedMetadataFields() { return indexedMetadataFields; }

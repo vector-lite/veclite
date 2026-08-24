@@ -93,13 +93,16 @@ public class MetadataFilterIndex {
 
     /**
      * 单值 EQ 匹配的 BitSet（返回拷贝副本，保证并发安全）。
+     * 与写入方法使用同一把实例锁，防止 clone/or 期间 BitSet 被并发修改导致撕裂读。
      */
     public BitSet getMatchingOffsetsEq(String field, Object value) {
-        Map<Object, BitSet> map = fieldIndexes.get(field);
-        if (map != null && value != null) {
-            BitSet bs = map.get(value);
-            if (bs != null) {
-                return (BitSet) bs.clone();
+        synchronized (this) {
+            Map<Object, BitSet> map = fieldIndexes.get(field);
+            if (map != null && value != null) {
+                BitSet bs = map.get(value);
+                if (bs != null) {
+                    return (BitSet) bs.clone();
+                }
             }
         }
         return new BitSet();
@@ -107,24 +110,34 @@ public class MetadataFilterIndex {
 
     /**
      * 列表 IN 匹配的 BitSet：通过多 BitSet 纳秒级按位或 (Bitwise OR) 运算合成并集。
+     * 与写入方法使用同一把实例锁，防止 or 合并期间源 BitSet 被并发修改。
      */
     public BitSet getMatchingOffsetsIn(String field, List<Object> values) {
         BitSet result = new BitSet();
         if (values == null || values.isEmpty()) {
             return result;
         }
-        Map<Object, BitSet> map = fieldIndexes.get(field);
-        if (map == null) {
-            return result;
-        }
-        for (Object val : values) {
-            if (val != null) {
-                BitSet bs = map.get(val);
-                if (bs != null) {
-                    result.or(bs); // 按位或运算合并并集
+        synchronized (this) {
+            Map<Object, BitSet> map = fieldIndexes.get(field);
+            if (map == null) {
+                return result;
+            }
+            for (Object val : values) {
+                if (val != null) {
+                    BitSet bs = map.get(val);
+                    if (bs != null) {
+                        result.or(bs); // 按位或运算合并并集
+                    }
                 }
             }
         }
         return result;
+    }
+
+    /**
+     * 清空全部倒排位图索引（reload 重置用）。
+     */
+    public synchronized void clear() {
+        fieldIndexes.clear();
     }
 }

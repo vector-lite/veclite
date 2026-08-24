@@ -96,10 +96,15 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
         if (models != null && models.containsKey(modelName)) {
             return models.get(modelName);
         }
-        VectorLiteProperties.ModelConfig config = new VectorLiteProperties.ModelConfig();
-        config.setName(modelName);
-        config.setUrl(properties.getEmbedding().getDefaultModel());
-        return config;
+        // 请求的模型未命中时，回退到默认模型名对应的配置（defaultModel 是名称，不是 URL）
+        String defaultModelName = properties.getEmbedding().getDefaultModel();
+        if (defaultModelName != null && !defaultModelName.equals(modelName)
+                && models != null && models.containsKey(defaultModelName)) {
+            return models.get(defaultModelName);
+        }
+        throw new IllegalArgumentException(
+                "No configuration found for embedding model [" + modelName + "]. "
+                        + "Please configure it under veclite.embedding.models with a valid URL.");
     }
 
     private List<Float> parseVectorNode(JsonNode arrayNode) {

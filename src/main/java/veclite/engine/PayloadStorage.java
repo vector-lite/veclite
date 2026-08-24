@@ -33,6 +33,13 @@ public interface PayloadStorage extends Closeable {
      */
     Map<String, Object> getMetadata(int offset);
 
+    /**
+     * 清空全部 Payload（reload 重置用）。
+     */
+    default void clear() {
+        // 默认空实现
+    }
+
     @Override
     default void close() {
         // 默认空实现

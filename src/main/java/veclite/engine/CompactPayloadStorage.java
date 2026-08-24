@@ -56,6 +56,13 @@ public class CompactPayloadStorage implements PayloadStorage {
         return (offset >= 0 && offset < capacity) ? metadatas[offset] : null;
     }
 
+    @Override
+    public synchronized void clear() {
+        Arrays.fill(ids, null);
+        Arrays.fill(texts, null);
+        Arrays.fill(metadatas, null);
+    }
+
     @SuppressWarnings("unchecked")
     private void ensureCapacity(int minCapacity) {
         if (minCapacity > capacity) {

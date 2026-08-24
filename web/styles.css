@@ -6,3 +6,6 @@
 .document-title { display:flex; justify-content:space-between; align-items:start; }
 .pagination { display:flex; justify-content:center; align-items:center; gap:12px; margin-top:18px; }
 .pagination span { color:var(--muted); font-size:13px; }
+
+.nested-fields { display:grid; gap:12px; padding:13px; border:1px solid var(--line); border-radius:8px; background:#f8faff; }
+.inline-fields { display:grid; grid-template-columns:1fr 110px; gap:12px; }

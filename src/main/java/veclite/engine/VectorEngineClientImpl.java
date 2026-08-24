@@ -167,7 +167,15 @@ public class VectorEngineClientImpl implements VectorEngineClient {
 
     @Override
     public VectorDocumentPage listDocuments(String storeName, int page, int size) {
-        return localVectorEngine.getStore(storeName).listDocuments(page, size);
+        LocalVectorStore store = localVectorEngine.getStore(storeName);
+
+        // 文档列表用于管理/调试页面，不应默认把高维向量传回客户端。
+        // LocalVectorStore 的分页约定从第 1 页开始，并会在内部跳过已删除文档；
+        // 这里先归一化参数，再补齐 API 层要求的分页元数据。
+        int safePage = Math.max(1, page);
+        int safeSize = size > 0 ? size : 20;
+        List<VectorDocument> items = store.listDocuments(safePage, safeSize, false);
+        return new VectorDocumentPage(items, safePage, safeSize, store.getActiveCount());
     }
 
     /**

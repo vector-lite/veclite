@@ -1,0 +1,33 @@
+server:
+  port: 8080
+
+veclite:
+  enabled: true
+  web:
+    enabled: true
+    base-path: /veclite/api/v1
+  # Embedding 接口管理：模型名称 + 版本是绑定 Store 的重要参数（绑定后不可变）
+  embedding:
+    default-model: text-embedding-demo
+    models:
+      text-embedding-demo:
+        name: text-embedding-demo
+        version: "1"
+        provider: http
+        url: http://localhost:9000/api/embed
+        timeout-millis: 3000
+        batch-size: 16
+  storage:
+    type: SNAPSHOT_FILE
+    snapshot-file:
+      base-path: ./data/vector-lite
+      flush-interval-seconds: 30
+      flush-on-shutdown: true
+    payload:
+      mode: MEMORY
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html

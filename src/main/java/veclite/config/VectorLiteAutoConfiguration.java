@@ -17,6 +17,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import veclite.web.VectorLiteDebugController;
+import veclite.web.VectorLiteUiController;
 
 /**
  * Veclite 向量 SDK Spring Boot 自动配置类。
@@ -27,7 +28,7 @@ import veclite.web.VectorLiteDebugController;
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(name = "veclite.enabled", havingValue = "true", matchIfMissing = true)
 @EnableConfigurationProperties(VectorLiteProperties.class)
-@Import(VectorLiteDebugController.class)
+@Import({VectorLiteDebugController.class, VectorLiteUiController.class})
 public class VectorLiteAutoConfiguration {
 
     /**

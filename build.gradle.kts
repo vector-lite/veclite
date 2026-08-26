@@ -1,7 +1,7 @@
 plugins {
     `java-library`
     `maven-publish`
-    id("org.springframework.boot") version "2.7.18" apply false
+    id("org.springframework.boot") version "2.7.18"
     id("io.spring.dependency-management") version "1.1.4"
 }
 
@@ -14,6 +14,9 @@ java {
 }
 
 repositories {
+    maven { url = uri("https://maven.aliyun.com/repository/public") }
+    maven { url = uri("https://maven.aliyun.com/repository/spring") }
+    maven { url = uri("https://maven.aliyun.com/repository/google") }
     mavenCentral()
 }
 
@@ -28,9 +31,8 @@ dependencies {
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
 
     implementation("com.fasterxml.jackson.core:jackson-databind")
-
-    compileOnly("org.springframework.boot:spring-boot-starter-web")
-    compileOnly("org.springdoc:springdoc-openapi-common:1.7.0")
+    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springdoc:springdoc-openapi-ui:1.7.0")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
@@ -39,6 +41,17 @@ dependencies {
 // artifact several gigabytes and can leave the jar task appearing to hang.
 tasks.processResources {
     exclude("vec/**")
+}
+
+tasks.getByName<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
+    enabled = true
+    archiveClassifier.set("boot")
+    mainClass.set("veclite.VecLiteApplication")
+}
+
+tasks.getByName<Jar>("jar") {
+    enabled = true
+    archiveClassifier.set("")
 }
 
 tasks.withType<Test> {

@@ -1,14 +1,14 @@
-# Repository Guidelines
+# veclite
 
-## Project Structure & Module Organization
+## 项目结构与模块职责
 
-This is a Java 17 vector-store library built with Gradle. Production code is in `src/main/java/veclite`, organized by responsibility: `api` exposes client-facing types, `engine` contains in-memory search and storage, `model` holds DTOs and enums, and `quantization`, `math`, `persistence`, `config`, `embedding`, and `web` provide supporting features. Keep new classes in the narrowest matching package.
+这是一个基于 Java 17 和 Gradle 的向量存储库。生产代码位于 `src/main/java/veclite`，按职责划分：`api` 提供公共接口，`engine` 负责内存检索和存储，`model` 放置 DTO 与枚举，`quantization`、`math`、`persistence`、`config`、`embedding` 和 `web` 提供配套能力。新增类必须放入职责最匹配的包。
 
-Tests live in `src/test/java/veclite`. Test data belongs in `src/test/resources/datasets`; do not add generated stores to source control. Runtime resources are under `src/main/resources`, including Spring metadata in `META-INF`, versioned design notes in `design`, and benchmark reports in `report`.
+测试位于 `src/test/java/veclite`，测试数据位于 `src/test/resources/datasets`；禁止将生成的 Store 提交到源码仓库。运行时资源位于 `src/main/resources`，包括 `META-INF` 中的 Spring 元数据、`design` 下的版本化设计说明和 `report` 下的基准报告。
 
-## Build, Test, and Development Commands
+## 构建、测试与开发命令
 
-Run commands from the Git project root (the directory containing `gradlew`):
+必须在包含 `gradlew` 的 Git 项目根目录执行：
 
 ```sh
 ./gradlew build                 # Compile, run tests, and package the library
@@ -17,16 +17,36 @@ Run commands from the Git project root (the directory containing `gradlew`):
 ./gradlew publishToMavenLocal   # Publish the 1.0.0 artifact locally
 ```
 
-The test task uses a 2-6 GB heap. Run benchmark, stress, and accuracy classes such as `V24ComprehensiveBenchmarkTest` selectively; they may create large local vector-store artifacts.
+普通测试使用 2～6GB 堆。`V24ComprehensiveBenchmarkTest` 等基准、压力和准确率测试必须选择性运行，因为它们可能生成大型本地向量库产物。
 
-## Coding Style & Naming Conventions
+## 代码风格与命名规范
 
-Use four-space indentation and standard Java brace placement. Follow the existing package naming (`veclite.engine`) and class naming (`LocalVectorStore`, `SQ8Quantizer`). Use `camelCase` for methods and fields, `UPPER_SNAKE_CASE` for constants, and expressive names for vector dimensions, offsets, and metrics. Keep public API validation explicit and use JUnit assertions rather than ad hoc output. No formatter, linter, or coverage threshold is configured; match surrounding code and keep diffs focused.
+使用四空格缩进和标准 Java 大括号风格。遵循现有包名（如 `veclite.engine`）和类名（如 `LocalVectorStore`、`SQ8Quantizer`）。方法和字段使用 `camelCase`，常量使用 `UPPER_SNAKE_CASE`，向量维度、偏移量和指标使用表达性强的名称。公共 API 必须显式校验，测试使用 JUnit 断言而不是临时输出。项目未配置格式化工具、Lint 或覆盖率阈值，应匹配周边代码并保持差异聚焦。
 
-## Testing Guidelines
+## 测试规范
 
-Use JUnit Jupiter (`@Test`, optional `@DisplayName`) and name tests `*Test.java`. Add focused regression tests beside related tests, covering normal behavior, invalid input, and boundary conditions. Use deterministic random seeds where randomized vectors are necessary. Run the affected class before the full suite.
+使用 JUnit Jupiter（`@Test`，可选 `@DisplayName`），测试类命名为 `*Test.java`。在相关测试旁增加聚焦的回归测试，覆盖正常行为、非法输入和边界条件；随机向量必须使用固定种子。先运行受影响的测试类，再运行完整测试套件。
 
-## Commit & Pull Request Guidelines
+## 提交与合并请求规范
 
-Recent history uses concise type-prefixed subjects, especially `feat ...`, with short Chinese descriptions. Follow that pattern, for example `feat: optimize SQ8 precomputation` or `fix: preserve mmap payload offsets`. Keep each commit coherent. Pull requests should state the behavior change, link the issue when available, list tests run, and include benchmark or API evidence when performance or public behavior changes.
+提交信息使用简洁的类型前缀，正文采用短中文描述，例如 `feat: 优化 SQ8 预计算` 或 `fix: 修复 mmap payload 偏移`。每个提交只解决一个清晰问题。合并请求应说明行为变化、关联问题、运行的测试，以及性能或公共 API 变化所对应的基准数据或 API 证据。
+
+## 扩展工程规则
+
+本文件是模型工具与开发者入口规范。任何代码、测试、配置或文档修改，都必须先阅读本文件，并按任务需要继续阅读以下关联文档：
+
+| 任务 | 文档 |
+| --- | --- |
+| 分层、领域建模、依赖方向、持久化边界 | [docs/architecture.md](docs/architecture.md) |
+| Java 编码、API 兼容、异常和性能热路径 | [docs/coding-style.md](docs/coding-style.md) |
+| 单元、集成、准确率、回归和压测 | [docs/testing.md](docs/testing.md) |
+| 日志、指标、健康检查、基准报告和告警 | [docs/observability.md](docs/observability.md) |
+
+### 工具工作流与质量门槛
+
+1. 先检查相关源码、测试、构建脚本和设计文档，再设计修改方案。
+2. 保持最小改动，禁止无关格式化、批量重命名和破坏性命令。
+3. 先运行受影响的测试，再运行 `./gradlew test`；性能变化必须运行对应基准测试。
+4. 交付时说明改动范围、验证命令、结果和未验证风险；不得伪造测试或指标。
+5. 公共 API 的签名、默认值、异常语义和序列化格式必须保持兼容。
+6. 新行为必须有测试；缺陷修复必须有回归测试；offset、召回率、线程安全和恢复能力不得被性能优化破坏。

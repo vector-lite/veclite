@@ -1,15 +1,22 @@
 package veclite.config;
 
+import com.aliyun.oss.ClientBuilderConfiguration;
+import com.aliyun.oss.OSS;
+import com.aliyun.oss.OSSClientBuilder;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import veclite.api.EmbeddingProvider;
 import veclite.api.VectorEngineClient;
 import veclite.api.VectorStoreManager;
+import veclite.embedding.EmbeddingService;
 import veclite.embedding.HttpEmbeddingProvider;
 import veclite.engine.LocalVectorEngine;
 import veclite.engine.VectorEngineClientImpl;
 import veclite.model.StorageType;
 import veclite.persistence.NoopVectorPersistenceStorage;
+import veclite.persistence.OssSnapshotStorage;
 import veclite.persistence.SnapshotFileStorage;
 import veclite.persistence.VectorPersistenceStorage;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -29,6 +36,7 @@ import veclite.web.VectorLiteUiController;
 @ConditionalOnProperty(name = "veclite.enabled", havingValue = "true", matchIfMissing = true)
 @EnableConfigurationProperties(VectorLiteProperties.class)
 @Import({VectorLiteDebugController.class, VectorLiteUiController.class})
+@EnableScheduling
 public class VectorLiteAutoConfiguration {
 
     /**
@@ -41,13 +49,56 @@ public class VectorLiteAutoConfiguration {
     }
 
     /**
+     * Embedding 服务（负责模型管理、版本归一化、批处理）。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public EmbeddingService embeddingService(EmbeddingProvider embeddingProvider,
+                                             VectorLiteProperties properties) {
+        return new EmbeddingService(embeddingProvider, properties);
+    }
+
+    /**
+     * OSS 客户端 Bean：仅在 storage.type=OSS 时创建。
+     * <p>AK/SK 必须从环境变量读取（ALIYUN_OSS_ACCESS_KEY_ID / _SECRET）。
+     * <p>连接 / 读超时从 {@code veclite.storage.oss.connect-timeout-ms / read-timeout-ms} 读取。
+     */
+    @Bean
+    @ConditionalOnProperty(name = "veclite.storage.type", havingValue = "OSS")
+    @ConditionalOnMissingBean
+    public OSS ossClient(VectorLiteProperties properties) {
+        VectorLiteProperties.OssConfig cfg = properties.getStorage().getOss();
+        String endpoint = firstNonBlank(cfg.getEndpoint(), System.getenv("ALIYUN_OSS_ENDPOINT"));
+        String ak = System.getenv("ALIYUN_OSS_ACCESS_KEY_ID");
+        String sk = System.getenv("ALIYUN_OSS_ACCESS_KEY_SECRET");
+        if (endpoint == null || ak == null || sk == null) {
+            throw new IllegalStateException(
+                    "OSS 配置不完整。请设置环境变量 ALIYUN_OSS_ENDPOINT / ALIYUN_OSS_ACCESS_KEY_ID / ALIYUN_OSS_ACCESS_KEY_SECRET");
+        }
+        ClientBuilderConfiguration clientCfg = new ClientBuilderConfiguration();
+        clientCfg.setConnectionTimeout(cfg.getConnectTimeoutMs());
+        clientCfg.setSocketTimeout(cfg.getReadTimeoutMs());
+        return new OSSClientBuilder().build(endpoint, ak, sk, clientCfg);
+    }
+
+    /**
      * 根据配置文件类型 (`veclite.storage.type`) 装配持久化存储策略组件
      */
     @Bean
     @ConditionalOnMissingBean
-    public VectorPersistenceStorage vectorPersistenceStorage(VectorLiteProperties properties) {
-        if (properties.getStorage().getType() == StorageType.SNAPSHOT_FILE) {
+    public VectorPersistenceStorage vectorPersistenceStorage(
+            VectorLiteProperties properties,
+            @Autowired(required = false) OSS ossClient) {
+        StorageType type = properties.getStorage().getType();
+        if (type == StorageType.SNAPSHOT_FILE) {
             return new SnapshotFileStorage(properties);
+        }
+        if (type == StorageType.OSS) {
+            if (ossClient == null) {
+                throw new IllegalStateException(
+                        "OSS Bean 未注入，请确认 application.yml 配了 veclite.storage.type=OSS");
+            }
+            return new OssSnapshotStorage(ossClient, properties);
         }
         return new NoopVectorPersistenceStorage();
     }
@@ -57,8 +108,9 @@ public class VectorLiteAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public LocalVectorEngine localVectorEngine(VectorLiteProperties properties) {
-        return new LocalVectorEngine(properties);
+    public LocalVectorEngine localVectorEngine(VectorLiteProperties properties,
+                                               EmbeddingService embeddingService) {
+        return new LocalVectorEngine(properties, embeddingService);
     }
 
     /**
@@ -77,8 +129,14 @@ public class VectorLiteAutoConfiguration {
     @ConditionalOnMissingBean
     public VectorEngineClient vectorEngineClient(LocalVectorEngine localVectorEngine,
                                                  EmbeddingProvider embeddingProvider,
+                                                 EmbeddingService embeddingService,
                                                  VectorPersistenceStorage vectorPersistenceStorage,
                                                  VectorLiteProperties properties) {
-        return new VectorEngineClientImpl(localVectorEngine, embeddingProvider, vectorPersistenceStorage, properties);
+        return new VectorEngineClientImpl(localVectorEngine, embeddingProvider, embeddingService,
+                vectorPersistenceStorage, properties);
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        return (a != null && !a.isBlank()) ? a : b;
     }
 }

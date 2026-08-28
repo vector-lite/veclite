@@ -1,0 +1,1149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>VecLite Embedding 演示</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+            margin: 0;
+            padding: 16px;
+            color: #1f2937;
+            background: #f3f4f6;
+            min-height: 100vh;
+        }
+        h1 { color: #111827; margin: 0 0 4px; font-size: 20px; }
+        .subtitle { color: #6b7280; margin-bottom: 14px; font-size: 13px; }
+
+        /* ===== 顶部全局设置 ===== */
+        .topbar {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px 16px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        }
+        .topbar input { flex: 1; }
+        .conn-status { font-size: 13px; }
+        .ok { color: #059669; }
+        .err { color: #dc2626; }
+
+        /* ===== Tab 栏 ===== */
+        .tabs {
+            display: flex;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+            overflow: hidden;
+        }
+        .tab {
+            padding: 12px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #6b7280;
+            border-right: 1px solid #e5e7eb;
+            transition: all 0.15s;
+            font-weight: 500;
+        }
+        .tab:hover { background: #f9fafb; color: #1f2937; }
+        .tab.active {
+            background: white;
+            color: #1d4ed8;
+            box-shadow: inset 0 -2px 0 #3b82f6;
+        }
+
+        /* ===== 主体两栏 ===== */
+        .workspace {
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 0;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 0 0 8px 8px;
+            min-height: 600px;
+            overflow: hidden;
+        }
+        .left-panel, .right-panel {
+            padding: 16px;
+            overflow: auto;
+        }
+        .left-panel {
+            border-right: 1px solid #e5e7eb;
+            background: #fafbfc;
+        }
+        .right-panel {
+            background: white;
+        }
+        .section { margin-bottom: 18px; }
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .form-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+        .form-row.vertical { flex-direction: column; align-items: stretch; }
+        .form-row label {
+            font-size: 12px;
+            color: #4b5563;
+            min-width: 64px;
+        }
+        input, textarea, select, button {
+            padding: 7px 10px;
+            font-size: 13px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-family: inherit;
+            background: white;
+        }
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+        textarea { font-family: ui-monospace, monospace; font-size: 12px; }
+        button {
+            cursor: pointer;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        button:hover { background: #2563eb; }
+        button.secondary { background: #6b7280; }
+        button.secondary:hover { background: #4b5563; }
+        button.danger { background: #dc2626; }
+        button.danger:hover { background: #b91c1c; }
+        button.success { background: #059669; }
+        button.success:hover { background: #047857; }
+        button:disabled { background: #d1d5db; cursor: not-allowed; }
+        button.small { padding: 4px 8px; font-size: 12px; }
+
+        /* ===== 列表/卡片 ===== */
+        .result-list { list-style: none; padding: 0; margin: 0; }
+        .result-list li {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            border-radius: 6px;
+            border-left: 3px solid #3b82f6;
+        }
+        .result-list .score {
+            color: #1d4ed8;
+            font-weight: 600;
+            font-family: ui-monospace, monospace;
+        }
+        .empty { color: #9ca3af; text-align: center; padding: 20px; font-size: 13px; }
+
+        /* ===== Store 卡片 ===== */
+        .store-card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .store-card:hover { border-color: #3b82f6; }
+        .store-card.active {
+            background: #dbeafe;
+            border-color: #3b82f6;
+        }
+        .store-card .name {
+            font-family: ui-monospace, monospace;
+            font-weight: 600;
+            color: #111827;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .store-card .meta {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 2px;
+        }
+        .source-tag {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .source-tag.oss { background: #fef3c7; color: #b45309; }
+        .source-tag.local { background: #dbeafe; color: #1d4ed8; }
+        .source-tag.memory { background: #f3e8ff; color: #6b21a8; }
+        .source-tag.unknown { background: #e5e7eb; color: #4b5563; }
+
+        /* ===== 配置表 ===== */
+        .config-table {
+            display: grid;
+            grid-template-columns: max-content 1fr;
+            gap: 4px 12px;
+            font-size: 12px;
+        }
+        .config-table .k { color: #6b7280; }
+        .config-table .v { color: #111827; font-family: ui-monospace, monospace; }
+
+        /* ===== FilterBuilder ===== */
+        .filter-builder {
+            background: white;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 10px;
+        }
+        .filter-builder .head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .filter-builder .head .title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #374151;
+        }
+        .filter-builder .row {
+            display: grid;
+            grid-template-columns: 1fr 90px 1fr;
+            gap: 6px;
+            align-items: center;
+        }
+        .filter-builder .row .val-cell { display: flex; gap: 4px; }
+        .filter-builder .row .val-cell input { flex: 1; }
+        .filter-builder .summary {
+            margin-top: 8px;
+            padding: 6px 8px;
+            background: #f3f4f6;
+            border-radius: 4px;
+            font-family: ui-monospace, monospace;
+            font-size: 11px;
+            color: #4b5563;
+            word-break: break-all;
+        }
+
+        /* ===== 检索结果 ===== */
+        .search-result {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            border-radius: 6px;
+            border-left: 3px solid #3b82f6;
+        }
+        .search-result .top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+        .search-result .text { color: #374151; font-size: 13px; }
+        .search-result .meta { color: #6b7280; font-size: 11px; margin-top: 4px; }
+        .rank-tag {
+            background: #3b82f6;
+            color: white;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-family: ui-monospace, monospace;
+        }
+
+        /* ===== 文档表格 ===== */
+        .docs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .docs-table th {
+            background: #f3f4f6;
+            text-align: left;
+            padding: 8px 10px;
+            font-weight: 600;
+            color: #374151;
+            border-bottom: 1px solid #e5e7eb;
+            position: sticky;
+            top: 0;
+        }
+        .docs-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #f3f4f6;
+            font-family: ui-monospace, monospace;
+        }
+        .docs-table tr:hover { background: #fafbfc; }
+        .pagination {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 12px;
+            font-size: 12px;
+            color: #6b7280;
+        }
+        .pagination .pages button {
+            margin: 0 2px;
+            padding: 4px 8px;
+            background: white;
+            color: #374151;
+            border: 1px solid #d1d5db;
+        }
+        .pagination .pages button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+
+        /* ===== Toast ===== */
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 18px;
+            background: #1f2937;
+            color: white;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: all 0.2s;
+            font-size: 13px;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.ok { background: #059669; }
+        .toast.err { background: #dc2626; }
+
+        .hidden { display: none !important; }
+
+        /* ===== 模态对话框（创建 Store） ===== */
+        .modal-dialog {
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            padding: 0;
+            width: 520px;
+            max-width: 90vw;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            background: white;
+        }
+        .modal-dialog::backdrop {
+            background: rgba(0,0,0,0.4);
+        }
+        .modal-form { padding: 20px; }
+        .modal-form h3 {
+            margin: 0 0 16px;
+            font-size: 16px;
+            color: #111827;
+            border-bottom: 1px solid #e5e7eb;
+            padding-bottom: 10px;
+        }
+        .modal-row {
+            margin-bottom: 12px;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-row label {
+            font-size: 12px;
+            color: #4b5563;
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+        .modal-row .req { color: #dc2626; }
+        .modal-row .hint {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 3px;
+        }
+        .modal-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .modal-err {
+            color: #dc2626;
+            font-size: 12px;
+            margin: 8px 0;
+            min-height: 16px;
+        }
+        .modal-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid #e5e7eb;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 VecLite Embedding 演示</h1>
+    <p class="subtitle">文本向量化 + 存储 + 检索 + OSS 持久化 全链路演示</p>
+
+    <!-- 顶部条 -->
+    <div class="topbar">
+        <label style="font-size:12px;color:#4b5563;">后端：</label>
+        <input id="baseUrl" type="text" value="http://localhost:8080/veclite/api/v1">
+        <button onclick="testConnection()">测试连接</button>
+        <span id="connectionStatus" class="conn-status"></span>
+    </div>
+
+    <!-- Tab 栏 -->
+    <div class="tabs">
+        <div class="tab active" data-tab="store" onclick="switchTab('store')">📦 Store 管理</div>
+        <div class="tab" data-tab="upsert" onclick="switchTab('upsert')">💾 存文档</div>
+        <div class="tab" data-tab="search" onclick="switchTab('search')">🔍 检索</div>
+        <div class="tab" data-tab="docs" onclick="switchTab('docs')">📋 文档列表</div>
+    </div>
+
+    <!-- 工作区 -->
+    <div class="workspace">
+        <div class="left-panel" id="leftPanel">
+            <!-- 内容由 JS 根据当前 tab 渲染 -->
+        </div>
+        <div class="right-panel" id="rightPanel">
+            <!-- 内容由 JS 根据当前 tab 渲染 -->
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <!-- 创建 Store 模态对话框 -->
+    <dialog id="createStoreDialog" class="modal-dialog">
+        <form method="dialog" onsubmit="event.preventDefault();submitCreateStore();" class="modal-form">
+            <h3>新建向量库 Store</h3>
+            <div class="modal-row">
+                <label>名称 <span class="req">*</span></label>
+                <input id="csName" type="text" placeholder="如: knowledge_base" required>
+            </div>
+            <div class="modal-grid">
+                <div class="modal-row">
+                    <label>维度</label>
+                    <select id="csDim">
+                        <option value="64">64</option>
+                        <option value="128">128</option>
+                        <option value="256">256</option>
+                        <option value="512">512</option>
+                        <option value="768">768</option>
+                        <option value="1024" selected>1024（推荐，text-embedding-v3 默认）</option>
+                    </select>
+                    <div class="hint">阿里云 text-embedding-v3 合法维度</div>
+                </div>
+                <div class="modal-row">
+                    <label>距离度量</label>
+                    <select id="csMetric">
+                        <option value="COSINE" selected>COSINE（余弦）</option>
+                        <option value="L2">L2（欧氏距离）</option>
+                        <option value="DOT_PRODUCT">DOT_PRODUCT（点积）</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-grid">
+                <div class="modal-row">
+                    <label>量化</label>
+                    <select id="csQuant">
+                        <option value="NONE">NONE（不量化）</option>
+                        <option value="SQ8" selected>SQ8（标量量化）</option>
+                    </select>
+                </div>
+                <div class="modal-row">
+                    <label>最大容量</label>
+                    <input id="csCapacity" type="number" value="100000" min="1000" max="10000000" step="10000">
+                </div>
+            </div>
+            <div class="modal-row">
+                <label>Embedding 模型</label>
+                <input id="csModel" type="text" value="text-embedding-v3" placeholder="如: text-embedding-v3（留空则不绑定）">
+            </div>
+            <div class="modal-row">
+                <label>元数据过滤字段</label>
+                <input id="csFields" type="text" placeholder="逗号分隔，如: category, tag, source">
+                <div class="hint">只有列在这里的字段才能在「检索」时用于元数据过滤</div>
+            </div>
+            <div id="csError" class="modal-err"></div>
+            <div class="modal-actions">
+                <button type="button" class="secondary" onclick="$('createStoreDialog').close()">取消</button>
+                <button type="submit">确认创建</button>
+            </div>
+        </form>
+    </dialog>
+
+    <script>
+        // ============================================================
+        // 全局状态
+        // ============================================================
+        let _storeDetails = [];
+        let _currentStore = null;  // { storeName, dimension, docCount, metric, quantization, maxCapacity, storageSource, embeddingModel }
+        let _currentTab = 'store';
+        let _docsPage = 0;
+        let _docsPageSize = 20;
+        let _docsTotal = 0;
+        let _docsData = [];
+        let _searchResults = [];
+        let _searchLatency = 0;
+
+        // ============================================================
+        // 工具
+        // ============================================================
+        function $(id) { return document.getElementById(id); }
+        function getBaseUrl() { return $('baseUrl').value.trim().replace(/\/$/, ''); }
+        function getCurrentStoreName() { return _currentStore ? _currentStore.storeName : ''; }
+        function showToast(msg, type) {
+            const t = $('toast');
+            t.textContent = msg;
+            t.className = 'toast show ' + (type || '');
+            setTimeout(() => t.className = 'toast ' + (type || ''), 2200);
+        }
+        function sourceTag(source) {
+            if (source === 'OSS') return '<span class="source-tag oss">🟢 OSS</span>';
+            if (source === 'LOCAL') return '<span class="source-tag local">📁 LOCAL</span>';
+            if (source === 'IN_MEMORY') return '<span class="source-tag memory">⚪ 内存</span>';
+            return '<span class="source-tag unknown">❓ 未知</span>';
+        }
+        async function api(path, options) {
+            const url = getBaseUrl() + path;
+            const opts = options || {};
+            opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+            const resp = await fetch(url, opts);
+            const text = await resp.text();
+            let data;
+            try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
+            if (!resp.ok) {
+                const msg = (data && (data.message || data.error)) || ('HTTP ' + resp.status);
+                throw new Error(msg);
+            }
+            return data;
+        }
+
+        // ============================================================
+        // Tab 切换
+        // ============================================================
+        function switchTab(name) {
+            _currentTab = name;
+            document.querySelectorAll('.tab').forEach(t => {
+                t.classList.toggle('active', t.dataset.tab === name);
+            });
+            renderTab();
+        }
+
+        function renderTab() {
+            if (_currentTab === 'store') renderStoreTab();
+            else if (_currentTab === 'upsert') renderUpsertTab();
+            else if (_currentTab === 'search') renderSearchTab();
+            else if (_currentTab === 'docs') renderDocsTab();
+        }
+
+        // ============================================================
+        // 0. 测试连接 / 拉 store 列表
+        // ============================================================
+        async function testConnection() {
+            try {
+                const details = await api('/stores/_details');
+                _storeDetails = details || [];
+                $('connectionStatus').innerHTML =
+                    '<span class="ok">✓ 已连接</span> · ' + _storeDetails.length + ' 个 store';
+                if (_storeDetails.length > 0 && !_currentStore) {
+                    selectStore(_storeDetails[0].storeName);
+                } else {
+                    renderTab();
+                }
+                return true;
+            } catch (e) {
+                $('connectionStatus').innerHTML = '<span class="err">✗ ' + e.message + '</span>';
+                return false;
+            }
+        }
+
+        async function refreshStoreDetails() {
+            try {
+                _storeDetails = await api('/stores/_details') || [];
+            } catch (e) {
+                _storeDetails = [];
+            }
+            // 同步更新 _currentStore
+            if (_currentStore) {
+                const fresh = _storeDetails.find(s => s.storeName === _currentStore.storeName);
+                if (fresh) _currentStore = fresh;
+            }
+        }
+
+        async function selectStore(name) {
+            const detail = _storeDetails.find(s => s.storeName === name);
+            if (detail) _currentStore = detail;
+            renderTab();
+        }
+
+        // ============================================================
+        // Tab 1: Store 管理
+        // ============================================================
+        function renderStoreTab() {
+            $('leftPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">操作</div>
+                    <div class="form-row">
+                        <button onclick="showCreateStore()">+ 新建 Store</button>
+                        <button class="secondary" onclick="refreshStore()">💾 落盘</button>
+                        <button class="secondary" onclick="reloadStore()">🔄 重载</button>
+                    </div>
+                    <div class="form-row">
+                        <button class="danger" onclick="purgeStore()">清空数据</button>
+                        <button class="danger" onclick="deleteStore()">删除库</button>
+                    </div>
+                </div>
+                <div class="section">
+                    <div class="section-title">Store 列表 (${_storeDetails.length})</div>
+                    <div id="storeCards"></div>
+                </div>
+            `;
+            renderStoreCards();
+            renderStoreRightPanel();
+        }
+        function renderStoreCards() {
+            const container = $('storeCards');
+            if (!container) return;
+            if (_storeDetails.length === 0) {
+                container.innerHTML = '<div class="empty">暂无 store，点「新建」创建一个</div>';
+                return;
+            }
+            let html = '';
+            _storeDetails.forEach(s => {
+                const active = _currentStore && _currentStore.storeName === s.storeName;
+                html += `<div class="store-card ${active ? 'active' : ''}" onclick="selectStore('${s.storeName}')">
+                    <div class="name">${s.storeName} ${sourceTag(s.storageSource)}</div>
+                    <div class="meta">${s.dimension || '?'} 维 · ${s.docCount || 0} 条 · ${s.metric || '-'}</div>
+                </div>`;
+            });
+            container.innerHTML = html;
+        }
+        function renderStoreRightPanel() {
+            if (!_currentStore) {
+                $('rightPanel').innerHTML = '<div class="empty">← 左侧选一个 store 查看详情</div>';
+                return;
+            }
+            const s = _currentStore;
+            $('rightPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">当前 Store: ${s.storeName} ${sourceTag(s.storageSource)}</div>
+                    <div class="config-table">
+                        <span class="k">维度</span><span class="v">${s.dimension || '?'}</span>
+                        <span class="k">文档数</span><span class="v">${s.docCount || 0}</span>
+                        <span class="k">最大容量</span><span class="v">${s.maxCapacity || '?'}</span>
+                        <span class="k">距离度量</span><span class="v">${s.metric || '-'}</span>
+                        <span class="k">量化</span><span class="v">${s.quantization || '-'}</span>
+                        <span class="k">数据来源</span><span class="v">${s.storageSource || '-'}</span>
+                    </div>
+                </div>
+                <div class="section">
+                    <div class="section-title">说明</div>
+                    <div style="font-size:12px;color:#4b5563;line-height:1.6;">
+                        · <b>落盘</b>：把当前内存数据同步到 OSS / 本地<br>
+                        · <b>重载</b>：从 OSS / 本地快照覆盖内存（丢弃未刷盘的修改）<br>
+                        · <b>清空数据</b>：删除所有文档，但保留 store 定义<br>
+                        · <b>删除库</b>：删除 store 及其全部数据（不可恢复）
+                    </div>
+                </div>
+            `;
+        }
+
+        async function showCreateStore() {
+            const dlg = $('createStoreDialog');
+            // 重置表单
+            $('csName').value = '';
+            $('csDim').value = 1024;
+            $('csMetric').value = 'COSINE';
+            $('csQuant').value = 'SQ8';
+            $('csCapacity').value = 100000;
+            $('csModel').value = 'text-embedding-v3';
+            $('csFields').value = '';
+            $('csError').textContent = '';
+            dlg.showModal();
+        }
+        async function submitCreateStore() {
+            const name = $('csName').value.trim();
+            if (!name) { $('csError').textContent = '请输入 store 名'; return; }
+            const dim = parseInt($('csDim').value);
+            if (!dim || dim < 1) { $('csError').textContent = '维度必须为正整数'; return; }
+            const cap = parseInt($('csCapacity').value);
+            if (!cap || cap < 1) { $('csError').textContent = '最大容量必须为正整数'; return; }
+            const fieldsStr = $('csFields').value.trim();
+            const indexedMetadataFields = fieldsStr
+                ? fieldsStr.split(',').map(s => s.trim()).filter(Boolean)
+                : [];
+            const payload = {
+                storeName: name,
+                dimension: dim,
+                metric: $('csMetric').value,
+                maxCapacity: cap,
+                embeddingModel: $('csModel').value.trim() || null,
+                quantization: $('csQuant').value,
+                indexedMetadataFields: indexedMetadataFields
+            };
+            try {
+                await api('/stores/' + name, {
+                    method: 'POST',
+                    body: JSON.stringify(payload)
+                });
+                $('createStoreDialog').close();
+                showToast('Store 创建成功', 'ok');
+                await refreshStoreDetails();
+                selectStore(name);
+            } catch (e) {
+                $('csError').textContent = e.message;
+            }
+        }
+        async function deleteStore() {
+            const name = getCurrentStoreName();
+            if (!name) return;
+            if (!confirm('确认删除 store "' + name + '"？此操作不可恢复！')) return;
+            try {
+                await api('/stores/' + name, { method: 'DELETE' });
+                showToast('已删除', 'ok');
+                _currentStore = null;
+                await refreshStoreDetails();
+                renderTab();
+            } catch (e) { showToast('删除失败：' + e.message, 'err'); }
+        }
+        async function refreshStore() {
+            const name = getCurrentStoreName();
+            if (!name) return;
+            try {
+                await api('/stores/' + name + '/refresh', { method: 'POST' });
+                showToast('已落盘 → ' + (_currentStore.storageSource || '持久化'), 'ok');
+            } catch (e) { showToast('落盘失败：' + e.message, 'err'); }
+        }
+        async function reloadStore() {
+            const name = getCurrentStoreName();
+            if (!name) return;
+            if (!confirm('从持久化重载 store "' + name + '"？未刷盘的修改会丢失！')) return;
+            try {
+                await api('/stores/' + name + '/reload', { method: 'POST' });
+                showToast('已重载', 'ok');
+                await refreshStoreDetails();
+                renderTab();
+            } catch (e) { showToast('重载失败：' + e.message, 'err'); }
+        }
+        async function purgeStore() {
+            const name = getCurrentStoreName();
+            if (!name) return;
+            try {
+                const page = await api('/stores/' + name + '/documents?page=0&size=1000');
+                const items = (page && page.items) || (Array.isArray(page) ? page : []);
+                const ids = items.map(d => d.id).filter(Boolean);
+                if (ids.length === 0) { showToast('该 store 暂无文档', 'ok'); return; }
+                if (!confirm('确认清空 ' + ids.length + ' 条文档？')) return;
+                await api('/stores/' + name + '/documents', { method: 'DELETE', body: JSON.stringify(ids) });
+                showToast('已清空 ' + ids.length + ' 条', 'ok');
+                await refreshStoreDetails();
+                renderTab();
+            } catch (e) { showToast('清空失败：' + e.message, 'err'); }
+        }
+
+        // ============================================================
+        // Tab 2: 存文档
+        // ============================================================
+        function renderUpsertTab() {
+            $('leftPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">${_currentStore ? '当前 store: ' + _currentStore.storeName : '未选 store'}</div>
+                    ${!_currentStore ? '<div class="empty">← 请先在「Store 管理」选一个 store</div>' : `
+                        <div class="config-table">
+                            <span class="k">维度</span><span class="v">${_currentStore.dimension || '?'}</span>
+                            <span class="k">度量</span><span class="v">${_currentStore.metric || '-'}</span>
+                            <span class="k">量化</span><span class="v">${_currentStore.quantization || '-'}</span>
+                            <span class="k">Embedding</span><span class="v">${_currentStore.embeddingModel || '未绑定'}</span>
+                        </div>
+                        <div class="hint" style="font-size:11px;color:#6b7280;margin-top:6px;">
+                            写入时按上述配置自动向量化（无需手填向量）
+                        </div>
+                    `}
+                </div>
+                <div class="section">
+                    <div class="section-title">写入文档</div>
+                    <div class="form-row vertical">
+                        <label>文档 ID</label>
+                        <input id="upId" type="text" placeholder="如 doc_01" value="doc_01">
+                    </div>
+                    <div class="form-row vertical">
+                        <label>文本</label>
+                        <textarea id="upText" rows="3" placeholder="输入文本（自动 Embedding）">机器学习是人工智能的分支</textarea>
+                    </div>
+                    <div class="form-row">
+                        <button onclick="doUpsert()">存</button>
+                        <button class="secondary" onclick="genRandomId()">随机 ID</button>
+                        <button class="success" onclick="batchUpsert()">快速添加 5 条</button>
+                    </div>
+                </div>
+            `;
+            $('rightPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">结果</div>
+                    <pre id="upsertResult" style="background:#1f2937;color:#f9fafb;padding:12px;border-radius:6px;font-size:12px;max-height:400px;overflow:auto;">点击「存」或「快速添加 5 条」查看结果...</pre>
+                </div>
+            `;
+        }
+        function genRandomId() {
+            $('upId').value = 'doc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 5);
+        }
+        async function doUpsert() {
+            const store = getCurrentStoreName();
+            if (!store) { showToast('请先选 store', 'err'); return; }
+            const id = $('upId').value.trim();
+            const text = $('upText').value.trim();
+            if (!id) { showToast('请输入 ID', 'err'); return; }
+            if (!text) { showToast('请输入文本', 'err'); return; }
+            $('upsertResult').textContent = '提交中...';
+            try {
+                await api('/stores/' + store + '/documents', {
+                    method: 'POST',
+                    body: JSON.stringify({ id, text, metadata: { source: 'embed-demo.html' } })
+                });
+                $('upsertResult').textContent = '✓ 成功：' + id;
+                showToast('已存', 'ok');
+                await refreshStoreDetails();
+                renderStoreRightPanel();
+            } catch (e) {
+                $('upsertResult').textContent = '✗ 失败：' + e.message;
+                showToast('失败：' + e.message, 'err');
+            }
+        }
+        async function batchUpsert() {
+            const store = getCurrentStoreName();
+            if (!store) return;
+            const samples = [
+                { id: 'doc_' + Date.now() + '_1', text: '向量数据库专门用于存储和检索高维向量' },
+                { id: 'doc_' + Date.now() + '_2', text: 'RAG 是结合检索和生成的 AI 架构' },
+                { id: 'doc_' + Date.now() + '_3', text: 'Embedding 把文本映射为稠密向量' },
+                { id: 'doc_' + Date.now() + '_4', text: '余弦相似度衡量两个向量的方向差异' },
+                { id: 'doc_' + Date.now() + '_5', text: 'SQ8 量化把 float32 压缩为 int8' }
+            ];
+            $('upsertResult').textContent = '批量提交 5 条...';
+            let ok = 0, fail = 0;
+            for (const doc of samples) {
+                try {
+                    await api('/stores/' + store + '/documents', {
+                        method: 'POST',
+                        body: JSON.stringify({ ...doc, metadata: { source: 'embed-demo.html', batch: true } })
+                    });
+                    ok++;
+                } catch (e) { fail++; }
+            }
+            $('upsertResult').textContent = '完成：成功 ' + ok + '，失败 ' + fail;
+            showToast('批量完成：' + ok + '/' + samples.length, fail > 0 ? 'err' : 'ok');
+            await refreshStoreDetails();
+            renderStoreRightPanel();
+        }
+
+        // ============================================================
+        // Tab 3: 检索
+        // ============================================================
+        function renderSearchTab() {
+            $('leftPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">${_currentStore ? '检索：' + _currentStore.storeName + '（' + (_currentStore.dimension || '?') + ' 维）' : '未选 store'}</div>
+                    ${!_currentStore ? '<div class="empty">← 请先选 store</div>' : `
+                        <div class="config-table">
+                            <span class="k">维度</span><span class="v">${_currentStore.dimension || '?'}</span>
+                            <span class="k">度量</span><span class="v">${_currentStore.metric || '-'}</span>
+                            <span class="k">量化</span><span class="v">${_currentStore.quantization || '-'}</span>
+                            <span class="k">Embedding</span><span class="v">${_currentStore.embeddingModel || '未绑定'}</span>
+                        </div>
+                        <div class="hint" style="font-size:11px;color:#6b7280;margin-top:6px;">
+                            文本检索按 store 维度自动 Embedding；向量检索需保证维度一致
+                        </div>
+                    `}
+                </div>
+                <div class="section">
+                    <div class="section-title">检索模式</div>
+                    <div class="form-row">
+                        <label>模式：</label>
+                        <select id="sMode">
+                            <option value="VECTOR">向量检索</option>
+                            <option value="TEXT" selected>文本检索</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="section" id="sTextSec">
+                    <div class="section-title">查询文本</div>
+                    <textarea id="sText" rows="2" placeholder="输入查询文本（自动 Embedding）">什么是 AI</textarea>
+                </div>
+                <div class="section hidden" id="sVecSec">
+                    <div class="section-title">查询向量 (JSON 数组)</div>
+                    <div class="form-row">
+                        <button class="secondary small" onclick="genRandomVec()">生成随机向量</button>
+                    </div>
+                    <textarea id="sVec" rows="4" placeholder="[0.1, -0.2, ...]"></textarea>
+                </div>
+                <div class="section">
+                    <div class="section-title">参数</div>
+                    <div class="form-row">
+                        <label>Top-K：</label>
+                        <input id="sTopK" type="number" value="10" min="1" max="50" style="width:80px;">
+                    </div>
+                    <div class="form-row">
+                        <label>最低分：</label>
+                        <input id="sMinScore" type="number" value="0" min="0" max="1" step="0.05" style="width:80px;">
+                    </div>
+                </div>
+                <div class="section">
+                    <div class="section-title">元数据过滤</div>
+                    <div id="filterBuilderContainer"></div>
+                </div>
+                <div class="section">
+                    <button onclick="doSearch()" style="width:100%;padding:10px;">🔍 执行检索</button>
+                </div>
+            `;
+            renderFilterBuilder();
+            bindModeToggle();
+            $('rightPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">检索结果</div>
+                    <div style="font-size:12px;color:#6b7280;margin-bottom:8px;" id="searchSummary">—</div>
+                    <ul id="searchResults" class="result-list"></ul>
+                </div>
+            `;
+        }
+        function bindModeToggle() {
+            const sel = $('sMode');
+            sel.onchange = () => {
+                const mode = sel.value;
+                $('sTextSec').classList.toggle('hidden', mode !== 'TEXT');
+                $('sVecSec').classList.toggle('hidden', mode !== 'VECTOR');
+            };
+            sel.dispatchEvent(new Event('change'));
+        }
+        function genRandomVec() {
+            const dim = _currentStore ? _currentStore.dimension : 128;
+            const arr = [];
+            for (let i = 0; i < dim; i++) arr.push(Number(((Math.random() * 2 - 1) * 0.4).toFixed(4)));
+            $('sVec').value = JSON.stringify(arr);
+        }
+        // ---- FilterBuilder ----
+        let _filterEnabled = false;
+        let _filterField = '';
+        let _filterOp = 'EQ';
+        let _filterValue = '';
+        let _filterValues = '';
+        function renderFilterBuilder() {
+            const c = $('filterBuilderContainer');
+            if (!c) return;
+            c.innerHTML = `
+                <div class="filter-builder">
+                    <div class="head">
+                        <span class="title">元数据过滤</span>
+                        <label style="font-size:12px;">
+                            <input type="checkbox" id="fbEnabled" ${_filterEnabled ? 'checked' : ''} onchange="_filterEnabled=this.checked;renderFilterBuilder();"> 启用
+                        </label>
+                    </div>
+                    ${_filterEnabled ? `
+                    <div class="row">
+                        <input id="fbField" type="text" placeholder="字段名（应配在 indexedMetadataFields）" value="${_filterField}" oninput="_filterField=this.value;updateFilterSummary()">
+                        <select id="fbOp" onchange="_filterOp=this.value;renderFilterBuilder()">
+                            <option value="EQ" ${_filterOp==='EQ'?'selected':''}>等于 (EQ)</option>
+                            <option value="IN" ${_filterOp==='IN'?'selected':''}>包含于 (IN)</option>
+                        </select>
+                        <div class="val-cell">
+                            ${_filterOp === 'EQ' ? `<input id="fbVal" type="text" placeholder="值" value="${_filterValue}" oninput="_filterValue=this.value;updateFilterSummary()">` :
+                              `<input id="fbVals" type="text" placeholder="逗号分隔 (a,b,c)" value="${_filterValues}" oninput="_filterValues=this.value;updateFilterSummary()">`}
+                        </div>
+                    </div>
+                    <div class="summary" id="fbSummary">—</div>
+                    ` : '<div class="empty" style="padding:8px;">未启用过滤</div>'}
+                </div>
+            `;
+            updateFilterSummary();
+        }
+        function updateFilterSummary() {
+            const el = $('fbSummary');
+            if (!el) return;
+            if (!_filterEnabled || !_filterField.trim()) { el.textContent = '—'; return; }
+            const f = buildFilter();
+            el.textContent = f ? JSON.stringify(f) : '—';
+        }
+        function buildFilter() {
+            if (!_filterEnabled || !_filterField.trim()) return null;
+            const obj = { field: _filterField.trim(), operator: _filterOp };
+            if (_filterOp === 'EQ') {
+                if (!_filterValue.trim()) return null;
+                obj.value = _filterValue;
+            } else if (_filterOp === 'IN') {
+                const arr = _filterValues.split(',').map(s => s.trim()).filter(Boolean);
+                if (arr.length === 0) return null;
+                obj.values = arr;
+            }
+            return obj;
+        }
+
+        async function doSearch() {
+            const store = getCurrentStoreName();
+            if (!store) { showToast('请先选 store', 'err'); return; }
+            const mode = $('sMode').value;
+            const topK = parseInt($('sTopK').value) || 10;
+            const minScore = parseFloat($('sMinScore').value) || 0;
+            const filter = buildFilter();
+
+            const body = { topK, minScore, filter };
+            if (mode === 'TEXT') {
+                const text = $('sText').value.trim();
+                if (!text) { showToast('请输入查询文本', 'err'); return; }
+                body.queryText = text;
+            } else {
+                const vecStr = $('sVec').value.trim();
+                if (!vecStr) { showToast('请输入查询向量（或点「生成随机向量」）', 'err'); return; }
+                let arr;
+                try {
+                    arr = JSON.parse(vecStr);
+                } catch (e) { showToast('向量 JSON 格式错：' + e.message, 'err'); return; }
+                if (!Array.isArray(arr)) { showToast('向量必须是数组', 'err'); return; }
+                // 维度校验：跟 store 维度一致
+                if (_currentStore && _currentStore.dimension && arr.length !== _currentStore.dimension) {
+                    showToast('向量维度不匹配：store 需要 ' + _currentStore.dimension + ' 维，你输入了 ' + arr.length + ' 维', 'err');
+                    return;
+                }
+                body.queryVector = arr;
+            }
+
+            const endpoint = mode === 'TEXT' ? '/search/text' : '/search/vector';
+            $('searchResults').innerHTML = '<li class="empty">检索中...</li>';
+            $('searchSummary').textContent = '检索中...';
+            const t0 = performance.now();
+            try {
+                const results = await api('/stores/' + store + endpoint, { method: 'POST', body: JSON.stringify(body) });
+                _searchLatency = Math.round(performance.now() - t0);
+                _searchResults = results || [];
+                $('searchSummary').textContent = '耗时 ' + _searchLatency + 'ms · 命中 ' + _searchResults.length + ' 条';
+                if (_searchResults.length === 0) {
+                    $('searchResults').innerHTML = '<li class="empty">无结果</li>';
+                    return;
+                }
+                let html = '';
+                _searchResults.forEach((r, i) => {
+                    const meta = r.metadata || r.document?.metadata || {};
+                    let metaHtml = '';
+                    if (Object.keys(meta).length > 0) {
+                        metaHtml = '<div class="meta">' +
+                            Object.entries(meta).map(([k, v]) => `<code>${k}=${v}</code>`).join(' · ') + '</div>';
+                    }
+                    html += `<li class="search-result">
+                        <div class="top">
+                            <div><span class="rank-tag">#${i+1}</span> <code style="margin-left:6px;">${r.id || '?'}</code></div>
+                            <div class="score">score = ${(r.score || 0).toFixed(4)}</div>
+                        </div>
+                        ${r.text ? '<div class="text">' + r.text + '</div>' : ''}
+                        ${metaHtml}
+                    </li>`;
+                });
+                $('searchResults').innerHTML = html;
+                showToast('命中 ' + _searchResults.length + ' 条，' + _searchLatency + 'ms', 'ok');
+            } catch (e) {
+                $('searchResults').innerHTML = '<li class="err">失败：' + e.message + '</li>';
+                $('searchSummary').textContent = '失败：' + e.message;
+                showToast('检索失败：' + e.message, 'err');
+            }
+        }
+
+        // ============================================================
+        // Tab 4: 文档列表
+        // ============================================================
+        function renderDocsTab() {
+            $('leftPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">${_currentStore ? '文档：' + _currentStore.storeName : '未选 store'}</div>
+                    ${!_currentStore ? '<div class="empty">← 请先选 store</div>' : ''}
+                </div>
+                <div class="section">
+                    <div class="section-title">分页</div>
+                    <div class="form-row">
+                        <label>每页：</label>
+                        <select id="dPageSize" onchange="_docsPageSize=parseInt(this.value);_docsPage=0;loadDocuments()">
+                            <option value="10">10</option>
+                            <option value="20" selected>20</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <button onclick="loadDocuments()">刷新</button>
+                        <button class="danger" onclick="purgeStore()">清空所有</button>
+                    </div>
+                </div>
+            `;
+            $('rightPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">文档列表</div>
+                    <div id="docsTableWrap"></div>
+                    <div class="pagination" id="docsPagination"></div>
+                </div>
+            `;
+            loadDocuments();
+        }
+        async function loadDocuments() {
+            const store = getCurrentStoreName();
+            if (!store) { $('docsTableWrap').innerHTML = '<div class="empty">未选 store</div>'; return; }
+            try {
+                const page = await api('/stores/' + store + '/documents?page=' + _docsPage + '&size=' + _docsPageSize);
+                let docs = [];
+                let total = 0;
+                if (Array.isArray(page)) {
+                    docs = page; total = page.length;
+                } else if (page) {
+                    docs = page.items || page.records || page.content || page.documents || [];
+                    total = page.total || _currentStore?.docCount || docs.length;
+                }
+                _docsData = docs;
+                _docsTotal = total;
+                renderDocsTable();
+            } catch (e) {
+                $('docsTableWrap').innerHTML = '<div class="err">失败：' + e.message + '</div>';
+            }
+        }
+        function renderDocsTable() {
+            const wrap = $('docsTableWrap');
+            if (!wrap) return;
+            if (_docsData.length === 0) {
+                wrap.innerHTML = '<div class="empty">暂无文档</div>';
+                $('docsPagination').innerHTML = '';
+                return;
+            }
+            let html = '<table class="docs-table"><thead><tr><th>ID</th><th>文本</th><th>元数据</th></tr></thead><tbody>';
+            _docsData.forEach(d => {
+                const text = d.text ? (d.text.length > 60 ? d.text.slice(0, 60) + '...' : d.text) : '-';
+                const meta = d.metadata ? JSON.stringify(d.metadata) : '-';
+                html += '<tr><td>' + (d.id || '?') + '</td><td>' + text + '</td><td style="color:#6b7280;">' + meta + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            wrap.innerHTML = html;
+            // 分页
+            const totalPages = Math.max(1, Math.ceil(_docsTotal / _docsPageSize));
+            const cur = _docsPage + 1;
+            let pages = '';
+            const start = Math.max(1, cur - 2);
+            const end = Math.min(totalPages, cur + 2);
+            if (_docsPage > 0) pages += '<button onclick="goDocsPage(' + (_docsPage - 1) + ')">‹</button>';
+            for (let p = start; p <= end; p++) {
+                pages += '<button class="' + (p === cur ? 'active' : '') + '" onclick="goDocsPage(' + (p-1) + ')">' + p + '</button>';
+            }
+            if (cur < totalPages) pages += '<button onclick="goDocsPage(' + (_docsPage + 1) + ')">›</button>';
+            $('docsPagination').innerHTML =
+                '<span>共 ' + _docsTotal + ' 条 · 第 ' + cur + '/' + totalPages + ' 页</span>' +
+                '<div class="pages">' + pages + '</div>';
+        }
+        function goDocsPage(p) {
+            _docsPage = p;
+            loadDocuments();
+        }
+
+        // ============================================================
+        // 启动
+        // ============================================================
+        window.addEventListener('load', () => {
+            testConnection();
+        });
+    </script>
+</body>
+</html>

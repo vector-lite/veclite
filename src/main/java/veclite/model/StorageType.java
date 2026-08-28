@@ -2,5 +2,6 @@ package veclite.model;
 
 public enum StorageType {
     NOOP,
-    SNAPSHOT_FILE
+    SNAPSHOT_FILE,
+    OSS
 }

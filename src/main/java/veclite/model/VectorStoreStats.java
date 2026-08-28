@@ -26,6 +26,14 @@ public class VectorStoreStats implements Serializable {
     @Schema(description = "Quantization type applied")
     private QuantizationType quantization;
 
+    @Schema(description = "Data source of this store: OSS / LOCAL / IN_MEMORY / UNKNOWN",
+            example = "OSS")
+    private String storageSource;
+
+    @Schema(description = "Embedding model bound to this store (used for text auto-embedding)",
+            example = "text-embedding-v3")
+    private String embeddingModel;
+
     public VectorStoreStats() {}
 
     public String getStoreName() { return storeName; }
@@ -40,4 +48,8 @@ public class VectorStoreStats implements Serializable {
     public void setMetric(String metric) { this.metric = metric; }
     public QuantizationType getQuantization() { return quantization; }
     public void setQuantization(QuantizationType quantization) { this.quantization = quantization; }
+    public String getStorageSource() { return storageSource; }
+    public void setStorageSource(String storageSource) { this.storageSource = storageSource; }
+    public String getEmbeddingModel() { return embeddingModel; }
+    public void setEmbeddingModel(String embeddingModel) { this.embeddingModel = embeddingModel; }
 }

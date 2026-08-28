@@ -717,6 +717,20 @@ public class LocalVectorStore {
         return sq8Frozen ? sq8Size : calibrationCount;
     }
 
+    /**
+     * 当前已分配的 Payload 槽位数（与 {@link #getVectorBufferSize()} 对账用）。
+     */
+    public int getPayloadSize() {
+        return payloadStorage != null ? payloadStorage.getSize() : 0;
+    }
+
+    /**
+     * 当前 ID 索引条目数（与 {@link #getVectorBufferSize()} 对账用）。
+     */
+    public int getIdIndexSize() {
+        return idOffsetIndex != null ? idOffsetIndex.size() : 0;
+    }
+
     public boolean isOffsetDeleted(int offset) {
         return deletedBitSet.isDeleted(offset);
     }

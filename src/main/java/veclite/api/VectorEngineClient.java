@@ -22,7 +22,14 @@ public interface VectorEngineClient {
 
     DeleteResult deleteByFilter(String storeName, FilterExpression filter);
 
-    VectorDocumentPage listDocuments(String storeName, int page, int size);
+    VectorDocumentPage listDocuments(String storeName, int page, int size, boolean includeVector);
+
+    /**
+     * 默认不返回 vector 字段的便捷方法。
+     */
+    default VectorDocumentPage listDocuments(String storeName, int page, int size) {
+        return listDocuments(storeName, page, size, false);
+    }
 
     VectorStoreStats stats(String storeName);
 

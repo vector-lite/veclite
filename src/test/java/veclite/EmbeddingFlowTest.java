@@ -58,7 +58,7 @@ public class EmbeddingFlowTest {
         provider = new RecordingEmbeddingProvider();
         embeddingService = new EmbeddingService(provider, properties);
         engine = new LocalVectorEngine(properties, embeddingService);
-        client = new VectorEngineClientImpl(engine, embeddingService, new NoopVectorPersistenceStorage(), properties);
+        client = new VectorEngineClientImpl(engine, provider, embeddingService, new NoopVectorPersistenceStorage(), properties);
     }
 
     private VectorStoreDefinition definition(String model, String version) {
@@ -166,12 +166,14 @@ public class EmbeddingFlowTest {
 
     @Test
     public void testTextUpsertWithoutBindingFails() {
+        // 清掉 default model 才能让 "无 model bound" 异常路径生效
+        properties.getEmbedding().setDefaultModel(null);
         client.createStore("s7", definition(null, null));
 
         VectorDocument doc = new VectorDocument("d1", null, "no embedding bound", new HashMap<>());
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> client.upsert("s7", doc));
-        assertTrue(ex.getMessage().contains("no embedding model bound"),
+        assertTrue(ex.getMessage().toLowerCase().contains("no embedding model bound"),
                 "错误信息应说明 Store 未绑定 Embedding 模型");
     }
 
@@ -219,19 +221,22 @@ public class EmbeddingFlowTest {
         final List<Call> calls = new ArrayList<>();
         volatile String lastModel;
         volatile String lastVersion;
+        volatile int lastDimension;
 
         @Override
-        public List<Float> embed(String modelName, String modelVersion, String text) {
+        public List<Float> embed(String modelName, String modelVersion, String text, int dimension) {
             lastModel = modelName;
             lastVersion = modelVersion;
+            lastDimension = dimension;
             calls.add(new Call(modelName, modelVersion, 1));
             return embedText(text);
         }
 
         @Override
-        public List<List<Float>> embedBatch(String modelName, String modelVersion, List<String> texts) {
+        public List<List<Float>> embedBatch(String modelName, String modelVersion, List<String> texts, int dimension) {
             lastModel = modelName;
             lastVersion = modelVersion;
+            lastDimension = dimension;
             calls.add(new Call(modelName, modelVersion, texts.size()));
             List<List<Float>> result = new ArrayList<>(texts.size());
             for (String text : texts) {

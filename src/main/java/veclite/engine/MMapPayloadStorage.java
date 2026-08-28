@@ -33,6 +33,7 @@ public class MMapPayloadStorage implements PayloadStorage {
     private String[] ids;
     private long[] filePositions;
     private int capacity;
+    private volatile int size;
 
     public MMapPayloadStorage(String storeName, String basePath, int initialCapacity) {
         this.capacity = Math.max(initialCapacity, 1024);
@@ -83,6 +84,9 @@ public class MMapPayloadStorage implements PayloadStorage {
                 fileChannel.write(buffer);
             }
             filePositions[offset] = filePos;
+            if (offset + 1 > size) {
+                size = offset + 1;
+            }
         } catch (Exception e) {
             throw new RuntimeException("Failed to put payload to MMap file at offset [" + offset + "]: " + e.getMessage(), e);
         } finally {
@@ -163,11 +167,17 @@ public class MMapPayloadStorage implements PayloadStorage {
     }
 
     @Override
+    public int getSize() {
+        return size;
+    }
+
+    @Override
     public void clear() {
         writeLock.lock();
         try {
             Arrays.fill(ids, null);
             Arrays.fill(filePositions, -1L);
+            size = 0;
             if (fileChannel != null && fileChannel.isOpen()) {
                 fileChannel.truncate(0);
                 fileChannel.position(0);

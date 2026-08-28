@@ -6,23 +6,39 @@ veclite:
   web:
     enabled: true
     base-path: /veclite/api/v1
+  # 内部一致性配置（v2.4 § 4.4）
+  # strict=true：assertConsistency 失败时直接抛 ConsistencyException，saveStore 落盘被阻止（生产推荐）
+  # strict=false：失败时打 ERROR 继续落盘（开发/调试用，可观察但可能写脏数据）
+  consistency:
+    strict: true
   # Embedding 接口管理：模型名称 + 版本是绑定 Store 的重要参数（绑定后不可变）
   embedding:
-    default-model: text-embedding-demo
+    default-model: text-embedding-v3
     models:
-      text-embedding-demo:
-        name: text-embedding-demo
-        version: "1"
-        provider: http
-        url: http://localhost:9000/api/embed
-        timeout-millis: 3000
-        batch-size: 16
+      text-embedding-v3:
+        name: text-embedding-v3
+        version: "v3"
+        provider: dashscope
+        url: https://llm-dij67chcqa06gb7k.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/embeddings
+        api-key: ${DASHSCOPE_API_KEY}
+        timeout-millis: 30000
+        batch-size: 8
   storage:
-    type: SNAPSHOT_FILE
+    type: OSS
     snapshot-file:
       base-path: ./data/vector-lite
       flush-interval-seconds: 30
       flush-on-shutdown: true
+    oss:
+      # 切到 OSS 时，把 type 改成 OSS，AK/SK 从环境变量读
+      # export ALIYUN_OSS_ENDPOINT=oss-cn-beijing.aliyuncs.com
+      # export ALIYUN_OSS_ACCESS_KEY_ID=xxx
+      # export ALIYUN_OSS_ACCESS_KEY_SECRET=xxx
+      endpoint: oss-cn-beijing.aliyuncs.com
+      bucket: java-lhy
+      key-prefix: veclite/
+      retry-times: 3
+      retry-backoff-ms: 500
     payload:
       mode: MEMORY
 

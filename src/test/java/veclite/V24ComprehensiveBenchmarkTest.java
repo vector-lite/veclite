@@ -1,6 +1,7 @@
 package veclite;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
@@ -23,6 +24,7 @@ import java.util.*;
  * Veclite V2.4 全维度多模式对比基准压测套件。
  * 覆盖 Float32 原生、SQ8 基础、SQ8 + P0 预计算加速、SQ8 + 多核并行搜索、SQ8 堆外内存 + MMAP 完整架构的全对比。
  */
+@Tag("benchmark")
 public class V24ComprehensiveBenchmarkTest {
 
     @Test

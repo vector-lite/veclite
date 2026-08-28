@@ -1,6 +1,7 @@
 package veclite;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
@@ -21,6 +22,7 @@ import java.util.*;
 /**
  * Veclite V2.3 (SQ8 堆外内存 + Payload MMap + 数值化 ID 字典) 5 规模向量库性能与内存基准测试。
  */
+@Tag("benchmark")
 public class V23SQ8BenchmarkTest {
 
     @Test

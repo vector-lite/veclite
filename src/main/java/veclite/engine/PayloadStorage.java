@@ -34,14 +34,6 @@ public interface PayloadStorage extends Closeable {
     Map<String, Object> getMetadata(int offset);
 
     /**
-     * 当前已分配的 Payload 槽位数（容量，而非非空条目数）。
-     * <p>用于 {@code assertConsistency} 与 vectorBuffer / idOffsetIndex 对账。
-     */
-    default int getSize() {
-        return 0;
-    }
-
-    /**
      * 清空全部 Payload（reload 重置用）。
      */
     default void clear() {

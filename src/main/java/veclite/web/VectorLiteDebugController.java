@@ -35,24 +35,6 @@ public class VectorLiteDebugController {
         return storeManager.listStores();
     }
 
-    @Operation(summary = "List all vector stores with details (dimension, metric, docCount, storageSource, etc.)")
-    @GetMapping("/stores/_details")
-    public List<VectorStoreStats> listStoresWithDetails() {
-        List<String> names = storeManager.listStores();
-        List<VectorStoreStats> result = new java.util.ArrayList<>(names.size());
-        for (String name : names) {
-            try {
-                result.add(client.stats(name));
-            } catch (Exception e) {
-                VectorStoreStats fallback = new VectorStoreStats();
-                fallback.setStoreName(name);
-                fallback.setStorageSource("UNKNOWN");
-                result.add(fallback);
-            }
-        }
-        return result;
-    }
-
     @Operation(summary = "Create a new vector store")
     @PostMapping("/stores/{storeName}")
     public Map<String, String> createStore(
@@ -91,9 +73,8 @@ public class VectorLiteDebugController {
     public VectorDocumentPage listDocuments(
             @Parameter(description = "Store name") @PathVariable String storeName,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
-            @RequestParam(defaultValue = "false") boolean includeVector) {
-        return client.listDocuments(storeName, page, size, includeVector);
+            @RequestParam(defaultValue = "20") int size) {
+        return client.listDocuments(storeName, page, size);
     }
 
     @Operation(summary = "Search by vector in a store")

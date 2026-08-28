@@ -2,17 +2,14 @@ package veclite.persistence;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
-import veclite.engine.ConsistencyException;
 import veclite.engine.LocalVectorStore;
-import veclite.engine.LocalVectorStoreAssertions;
 import veclite.model.VectorDocument;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,8 +28,6 @@ import java.util.Map;
  * @author zhaoyuanlu
  */
 public class SnapshotFileStorage implements VectorPersistenceStorage {
-
-    private static final Logger log = LoggerFactory.getLogger(SnapshotFileStorage.class);
 
     /** 向量配置属性 */
     private final VectorLiteProperties properties;
@@ -53,25 +48,17 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
             return;
         }
         String storeName = store.getDefinition().getStoreName();
-        // 落盘前做内部一致性断言（v2.4 § 4.4）：
-        // 严格模式：直接抛 ConsistencyException，saveStore 失败（内存数据保留）
-        // 非严格模式：打 ERROR 继续落盘
-        try {
-            LocalVectorStoreAssertions.assertConsistency(store);
-        } catch (ConsistencyException ce) {
-            if (properties.getConsistency().isStrict()) {
-                throw ce;
-            }
-            log.error("Consistency check failed for store [{}] (non-strict, continuing): {}",
-                    storeName, ce.getMessage());
-        }
         File storeDir = getStoreDir(storeName);
         if (!storeDir.exists()) {
             storeDir.mkdirs();
         }
 
         // 1. 创建临时目录 storeName.tmp
-        File tmpDir = SnapshotFileUtil.prepareTempDir(storeDir.getParentFile(), storeName);
+        File tmpDir = new File(storeDir.getParentFile(), storeName + ".tmp");
+        if (tmpDir.exists()) {
+            deleteDirectory(tmpDir);
+        }
+        tmpDir.mkdirs();
 
         try {
             // 2. 写入 store.json 配置
@@ -141,7 +128,9 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
             throw new RuntimeException("Failed to save snapshot for store [" + storeName + "]: " + e.getMessage(), e);
         } finally {
             // 清理可能残留的临时目录
-            SnapshotFileUtil.deleteRecursively(tmpDir);
+            if (tmpDir.exists()) {
+                deleteDirectory(tmpDir);
+            }
         }
     }
 
@@ -235,7 +224,9 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
     @Override
     public synchronized void deleteStore(String storeName) {
         File storeDir = getStoreDir(storeName);
-        SnapshotFileUtil.deleteRecursively(storeDir);
+        if (storeDir.exists()) {
+            deleteDirectory(storeDir);
+        }
     }
 
     private File getStoreDir(String storeName) {
@@ -243,11 +234,49 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
         return new File(basePath, storeName);
     }
 
+    private boolean deleteDirectory(File dir) {
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File f : files) {
+                if (f.isDirectory()) {
+                    deleteDirectory(f);
+                } else {
+                    f.delete();
+                }
+            }
+        }
+        return dir.delete();
+    }
+
     /**
-     * 目录级原子交换委托给 {@link SnapshotFileUtil#swapDirectoryAtomic}。
+     * 目录级原子交换：
+     * 1. 将旧目录重命名为 storeName.bak（原子操作）
+     * 2. 将临时目录重命名为正式目录（原子操作）
+     * 3. 删除 .bak
+     * 任何一步失败都会尝试回滚旧目录，保证磁盘上始终存在一份完整可用的快照。
      */
     private void swapDirectoryAtomic(File tmpDir, File storeDir, String storeName) throws IOException {
-        SnapshotFileUtil.swapDirectoryAtomic(tmpDir, storeDir, storeName);
+        File bakDir = new File(storeDir.getParentFile(), storeName + ".bak");
+        if (bakDir.exists()) {
+            deleteDirectory(bakDir);
+        }
+        boolean movedOld = false;
+        if (storeDir.exists()) {
+            Files.move(storeDir.toPath(), bakDir.toPath());
+            movedOld = true;
+        }
+        try {
+            Files.move(tmpDir.toPath(), storeDir.toPath());
+        } catch (IOException moveEx) {
+            // 回滚：把旧目录移回原位
+            if (movedOld && !storeDir.exists()) {
+                Files.move(bakDir.toPath(), storeDir.toPath());
+            }
+            throw moveEx;
+        }
+        if (movedOld) {
+            deleteDirectory(bakDir);
+        }
     }
 
     private void writeFloatArray(DataOutputStream dos, float[] values) throws IOException {

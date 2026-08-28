@@ -34,8 +34,6 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springdoc:springdoc-openapi-ui:1.7.0")
 
-    implementation("com.aliyun.oss:aliyun-sdk-oss:3.17.4")
-
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
 
@@ -56,10 +54,43 @@ tasks.getByName<Jar>("jar") {
     archiveClassifier.set("")
 }
 
-tasks.withType<Test> {
-    useJUnitPlatform()
+tasks.named<Test>("test") {
+    description = "运行快速单元测试与功能回归测试（排除 Benchmark、Stress、Accuracy 等大型测试）。"
+    useJUnitPlatform {
+        excludeTags("benchmark", "stress", "accuracy", "manual")
+    }
+    minHeapSize = "512m"
+    maxHeapSize = "2g"
+}
+
+tasks.register<Test>("benchmark") {
+    description = "运行 SQ8 及各架构版本的检索性能、QPS 与内存基准测试。"
+    group = "verification"
+    useJUnitPlatform {
+        includeTags("benchmark")
+    }
     minHeapSize = "2g"
     maxHeapSize = "6g"
+}
+
+tasks.register<Test>("stressTest") {
+    description = "运行 1核1G 极限硬件受限及高负荷并发压力测试。"
+    group = "verification"
+    useJUnitPlatform {
+        includeTags("stress")
+    }
+    minHeapSize = "2g"
+    maxHeapSize = "6g"
+}
+
+tasks.register<Test>("accuracyTest") {
+    description = "运行基于 Ground Truth 数据集的召回率与向量计算精度校验。"
+    group = "verification"
+    useJUnitPlatform {
+        includeTags("accuracy")
+    }
+    minHeapSize = "1g"
+    maxHeapSize = "2g"
 }
 
 tasks.register<Test>("v24ResourceBenchmark") {

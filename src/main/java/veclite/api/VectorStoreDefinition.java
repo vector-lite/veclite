@@ -35,9 +35,6 @@ public class VectorStoreDefinition implements Serializable {
     @Schema(description = "Metadata fields to build index on for fast filtering")
     private List<String> indexedMetadataFields = new ArrayList<>();
 
-    @Schema(description = "Snapshot version (e.g. \"v_1724683800000_3\"). Auto-incremented on each successful saveStore; used to verify OSS write integrity (v2.4 § 4.4)")
-    private String snapshotVersion;
-
     public VectorStoreDefinition() {}
 
     public String getStoreName() { return storeName; }
@@ -56,6 +53,4 @@ public class VectorStoreDefinition implements Serializable {
     public void setQuantization(QuantizationType quantization) { this.quantization = quantization; }
     public List<String> getIndexedMetadataFields() { return indexedMetadataFields; }
     public void setIndexedMetadataFields(List<String> indexedMetadataFields) { this.indexedMetadataFields = indexedMetadataFields; }
-    public String getSnapshotVersion() { return snapshotVersion; }
-    public void setSnapshotVersion(String snapshotVersion) { this.snapshotVersion = snapshotVersion; }
 }

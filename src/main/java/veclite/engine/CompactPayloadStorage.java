@@ -16,7 +16,6 @@ public class CompactPayloadStorage implements PayloadStorage {
     @SuppressWarnings("unchecked")
     private Map<String, Object>[] metadatas;
     private int capacity;
-    private volatile int size;
 
     @SuppressWarnings("unchecked")
     public CompactPayloadStorage(int initialCapacity) {
@@ -32,9 +31,6 @@ public class CompactPayloadStorage implements PayloadStorage {
         ids[offset] = id;
         texts[offset] = text;
         metadatas[offset] = metadata;
-        if (offset + 1 > size) {
-            size = offset + 1;
-        }
     }
 
     @Override
@@ -61,16 +57,10 @@ public class CompactPayloadStorage implements PayloadStorage {
     }
 
     @Override
-    public synchronized int getSize() {
-        return size;
-    }
-
-    @Override
     public synchronized void clear() {
         Arrays.fill(ids, null);
         Arrays.fill(texts, null);
         Arrays.fill(metadatas, null);
-        size = 0;
     }
 
     @SuppressWarnings("unchecked")

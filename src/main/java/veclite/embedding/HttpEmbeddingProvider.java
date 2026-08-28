@@ -35,8 +35,8 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
 
     /** {@inheritDoc} */
     @Override
-    public List<Float> embed(String modelName, String modelVersion, String text, int dimension) {
-        List<List<Float>> results = embedBatch(modelName, modelVersion, Collections.singletonList(text), dimension);
+    public List<Float> embed(String modelName, String modelVersion, String text) {
+        List<List<Float>> results = embedBatch(modelName, modelVersion, Collections.singletonList(text));
         if (results != null && !results.isEmpty()) {
             return results.get(0);
         }
@@ -45,7 +45,7 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
 
     /** {@inheritDoc} */
     @Override
-    public List<List<Float>> embedBatch(String modelName, String modelVersion, List<String> texts, int dimension) {
+    public List<List<Float>> embedBatch(String modelName, String modelVersion, List<String> texts) {
         VectorLiteProperties.ModelConfig modelConfig = resolveModelConfig(modelName);
         String urlString = modelConfig.getUrl();
         if (urlString == null || urlString.isEmpty()) {
@@ -57,9 +57,6 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod(HTTP_METHOD);
             conn.setRequestProperty("Content-Type", JSON_CONTENT_TYPE);
-            if (modelConfig.getApiKey() != null && !modelConfig.getApiKey().isEmpty()) {
-                conn.setRequestProperty("Authorization", "Bearer " + modelConfig.getApiKey());
-            }
             conn.setConnectTimeout(modelConfig.getTimeoutMillis());
             conn.setReadTimeout(modelConfig.getTimeoutMillis());
             conn.setDoOutput(true);
@@ -68,11 +65,6 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
             reqBody.put("model", modelName);
             reqBody.put("version", modelVersion != null ? modelVersion : modelConfig.getVersion());
             reqBody.put("input", texts);
-            // 维度优先级：调用方传入 > yml ModelConfig 配置
-            int effectiveDim = dimension > 0 ? dimension : modelConfig.getDimension();
-            if (effectiveDim > 0) {
-                reqBody.put("dimension", effectiveDim);
-            }
 
             byte[] jsonBytes = objectMapper.writeValueAsBytes(reqBody);
             try (OutputStream os = conn.getOutputStream()) {

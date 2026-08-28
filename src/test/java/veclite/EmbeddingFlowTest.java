@@ -58,7 +58,7 @@ public class EmbeddingFlowTest {
         provider = new RecordingEmbeddingProvider();
         embeddingService = new EmbeddingService(provider, properties);
         engine = new LocalVectorEngine(properties, embeddingService);
-        client = new VectorEngineClientImpl(engine, embeddingService, new NoopVectorPersistenceStorage(), properties);
+        client = new VectorEngineClientImpl(engine, provider, new NoopVectorPersistenceStorage(), properties);
     }
 
     private VectorStoreDefinition definition(String model, String version) {

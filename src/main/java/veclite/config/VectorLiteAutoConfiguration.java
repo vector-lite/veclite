@@ -3,6 +3,7 @@ package veclite.config;
 import veclite.api.EmbeddingProvider;
 import veclite.api.VectorEngineClient;
 import veclite.api.VectorStoreManager;
+import veclite.embedding.EmbeddingService;
 import veclite.embedding.HttpEmbeddingProvider;
 import veclite.engine.LocalVectorEngine;
 import veclite.engine.VectorEngineClientImpl;
@@ -53,12 +54,21 @@ public class VectorLiteAutoConfiguration {
     }
 
     /**
+     * Embedding 接口管理服务
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public EmbeddingService embeddingService(EmbeddingProvider embeddingProvider, VectorLiteProperties properties) {
+        return new EmbeddingService(embeddingProvider, properties);
+    }
+
+    /**
      * 内存向量引擎核心实例
      */
     @Bean
     @ConditionalOnMissingBean
-    public LocalVectorEngine localVectorEngine(VectorLiteProperties properties) {
-        return new LocalVectorEngine(properties);
+    public LocalVectorEngine localVectorEngine(VectorLiteProperties properties, EmbeddingService embeddingService) {
+        return new LocalVectorEngine(properties, embeddingService);
     }
 
     /**

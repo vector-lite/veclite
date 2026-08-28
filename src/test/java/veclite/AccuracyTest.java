@@ -3,6 +3,7 @@ package veclite;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
@@ -18,6 +19,7 @@ import java.util.*;
  * 向量查询正确率 (Accuracy & Ground Truth Recall) 自动化验证测试类。
  * 数据集与答案存放在 src/test/resources/datasets/ 目录下。
  */
+@Tag("accuracy")
 public class AccuracyTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();

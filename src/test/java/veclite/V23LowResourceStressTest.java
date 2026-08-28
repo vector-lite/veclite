@@ -1,6 +1,7 @@
 package veclite;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
@@ -21,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * 模拟 1核1G (1 CPU Core, 1GB RAM) 极限硬件资源下的 V2.3 性能与延迟压测类。
  */
+@Tag("stress")
 public class V23LowResourceStressTest {
 
     @Test

@@ -1,6 +1,7 @@
 package veclite;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
@@ -26,6 +27,7 @@ import java.util.*;
  * - 向量维度：512 维
  * - 距离度量：余弦相似度 (COSINE)
  */
+@Tag("benchmark")
 public class SQ8BenchmarkTest {
 
     /**

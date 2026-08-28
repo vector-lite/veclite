@@ -3,6 +3,7 @@ package veclite;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
@@ -30,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  *   -Des.manual.enabled=true
  * </pre>
  */
+@Tag("manual")
 public class ElasticsearchOllamaVectorSearchManualTest {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();

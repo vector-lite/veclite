@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
@@ -23,6 +24,7 @@ import java.util.*;
 /**
  * 内存占用评估与耗时基准测试类。
  */
+@Tag("benchmark")
 public class StoreMemoryBenchmarkTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();

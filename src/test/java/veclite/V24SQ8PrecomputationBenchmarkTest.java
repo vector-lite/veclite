@@ -1,6 +1,7 @@
 package veclite;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
@@ -23,6 +24,7 @@ import java.util.*;
 /**
  * Veclite V2.4 SQ8 代数展开与免反量化预计算 (SQ8 Precomputation + Zero-Allocation Direct Scan) 性能与 QPS 基准测试报告生成器。
  */
+@Tag("benchmark")
 public class V24SQ8PrecomputationBenchmarkTest {
 
     @Test

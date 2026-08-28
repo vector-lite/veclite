@@ -4,6 +4,7 @@ import veclite.api.EmbeddingProvider;
 import veclite.api.VectorEngineClient;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
+import veclite.embedding.EmbeddingService;
 import veclite.model.*;
 import veclite.persistence.VectorPersistenceStorage;
 
@@ -19,8 +20,8 @@ public class VectorEngineClientImpl implements VectorEngineClient {
     /** 本地向量引擎（管理 Store 实例映射） */
     private final LocalVectorEngine localVectorEngine;
     
-    /** 文本 Embedding 向量化提供者 */
-    private final EmbeddingProvider embeddingProvider;
+    /** 文本 Embedding 服务 */
+    private final EmbeddingService embeddingService;
     
     /** 持久化存储接口 */
     private final VectorPersistenceStorage persistence;
@@ -33,7 +34,7 @@ public class VectorEngineClientImpl implements VectorEngineClient {
                                   VectorPersistenceStorage persistence,
                                   VectorLiteProperties properties) {
         this.localVectorEngine = localVectorEngine;
-        this.embeddingProvider = embeddingProvider;
+        this.embeddingService = embeddingProvider != null ? new EmbeddingService(embeddingProvider, properties) : null;
         this.persistence = persistence;
         this.properties = properties;
 
@@ -79,7 +80,16 @@ public class VectorEngineClientImpl implements VectorEngineClient {
      */
     @Override
     public void upsert(String storeName, VectorDocument document) {
+        if (document == null || document.getId() == null) {
+            throw new IllegalArgumentException("Document and Document ID must not be null");
+        }
+        if (document.getVector() == null && document.getText() == null) {
+            throw new IllegalArgumentException("Document must contain either a vector or text");
+        }
         LocalVectorStore store = localVectorEngine.getStore(storeName);
+        if (document.getVector() == null) {
+            autoEmbed(store, List.of(document));
+        }
         store.upsert(document);
     }
 
@@ -92,8 +102,47 @@ public class VectorEngineClientImpl implements VectorEngineClient {
             return;
         }
         LocalVectorStore store = localVectorEngine.getStore(storeName);
+        List<VectorDocument> needEmbed = new java.util.ArrayList<>();
+        for (VectorDocument doc : documents) {
+            if (doc == null || doc.getId() == null) {
+                throw new IllegalArgumentException("Document and Document ID must not be null");
+            }
+            if (doc.getVector() == null && doc.getText() == null) {
+                throw new IllegalArgumentException("Document must contain either a vector or text");
+            }
+            if (doc.getVector() == null) {
+                needEmbed.add(doc);
+            }
+        }
+        if (!needEmbed.isEmpty()) {
+            autoEmbed(store, needEmbed);
+        }
         for (VectorDocument doc : documents) {
             store.upsert(doc);
+        }
+    }
+
+    private void autoEmbed(LocalVectorStore store, List<VectorDocument> docs) {
+        String modelName = store.getDefinition().getEmbeddingModel();
+        String modelVersion = store.getDefinition().getEmbeddingModelVersion();
+        if (modelName == null) {
+            throw new IllegalStateException("Store [" + store.getDefinition().getStoreName() + "] has no embedding model bound to embed text.");
+        }
+        if (embeddingService == null) {
+            throw new IllegalStateException("No EmbeddingService configured for store: " + store.getDefinition().getStoreName());
+        }
+        List<String> texts = new java.util.ArrayList<>(docs.size());
+        for (VectorDocument doc : docs) {
+            texts.add(doc.getText());
+        }
+        List<List<Float>> embedded = embeddingService.embedTexts(modelName, modelVersion, texts);
+        for (int i = 0; i < docs.size(); i++) {
+            List<Float> list = embedded.get(i);
+            float[] vec = new float[list.size()];
+            for (int j = 0; j < list.size(); j++) {
+                vec[j] = list.get(j);
+            }
+            docs.get(i).setVector(vec);
         }
     }
 
@@ -119,15 +168,16 @@ public class VectorEngineClientImpl implements VectorEngineClient {
         }
         LocalVectorStore store = localVectorEngine.getStore(request.getStoreName());
         String modelName = store.getDefinition().getEmbeddingModel();
+        String modelVersion = store.getDefinition().getEmbeddingModelVersion();
         if (modelName == null) {
             modelName = properties.getEmbedding().getDefaultModel();
         }
-        if (embeddingProvider == null || modelName == null) {
+        if (embeddingService == null || modelName == null) {
             throw new IllegalStateException("No EmbeddingProvider or embedding model configured for store: " + request.getStoreName());
         }
 
         // 调用 Embedding 模型计算查询文本的向量
-        List<Float> floatList = embeddingProvider.embed(modelName, null, request.getQueryText());
+        List<Float> floatList = embeddingService.embed(modelName, modelVersion, request.getQueryText());
         float[] vector = new float[floatList.size()];
         for (int i = 0; i < floatList.size(); i++) {
             vector[i] = floatList.get(i);

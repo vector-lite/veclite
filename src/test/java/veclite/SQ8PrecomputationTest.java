@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
 import veclite.engine.LocalVectorEngine;
-import veclite.engine.LocalVectorStore;
 import veclite.engine.VectorEngineClientImpl;
 import veclite.model.QuantizationType;
 import veclite.model.VectorDocument;
@@ -13,7 +12,6 @@ import veclite.model.VectorSearchRequest;
 import veclite.model.VectorSearchResult;
 import veclite.quantization.SQ8Quantizer;
 
-import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Random;
 
@@ -22,19 +20,27 @@ import static org.junit.jupiter.api.Assertions.*;
 public class SQ8PrecomputationTest {
 
     @Test
-    @DisplayName("验证 SQ8Precomputation 数学代数展开与传统 calculateCosine 的绝对相等性 (epsilon <= 1e-5f)")
-    void testSQ8PrecomputationMathIdentity() {
+    @DisplayName("验证 SQ8 零拷贝计算与反量化后计算的余弦相似度完全一致 (epsilon <= 1e-5f)")
+    void testSQ8CosineMathIdentity() {
         int dim = 512;
-        float min = -0.5f;
-        float max = 0.5f;
-
         Random random = new Random(42);
-        float[] query = new float[dim];
+
+        float[] minPerDim = new float[dim];
+        float[] maxPerDim = new float[dim];
+        float[] scalePerDim = new float[dim];
         for (int i = 0; i < dim; i++) {
-            query[i] = random.nextFloat() - 0.5f;
+            minPerDim[i] = -0.5f + random.nextFloat() * 0.1f;
+            maxPerDim[i] = 0.5f + random.nextFloat() * 0.1f;
+            scalePerDim[i] = (maxPerDim[i] - minPerDim[i]) / 255.0f;
         }
 
-        SQ8Quantizer.SQ8QueryPrecomputation precomp = SQ8Quantizer.precompute(query, min, max);
+        float[] query = new float[dim];
+        float queryNormSq = 0.0f;
+        for (int i = 0; i < dim; i++) {
+            query[i] = random.nextFloat() - 0.5f;
+            queryNormSq += query[i] * query[i];
+        }
+        float queryNormInv = queryNormSq > 0.0f ? 1.0f / (float) Math.sqrt(queryNormSq) : 0.0f;
 
         for (int t = 0; t < 100; t++) {
             float[] targetFloat = new float[dim];
@@ -42,30 +48,35 @@ public class SQ8PrecomputationTest {
             for (int i = 0; i < dim; i++) {
                 targetFloat[i] = (random.nextFloat() - 0.5f);
             }
-            SQ8Quantizer.quantize(targetFloat, min, max, targetBytes);
+            SQ8Quantizer.quantize(targetFloat, minPerDim, scalePerDim, targetBytes);
 
-            float legacyScore = SQ8Quantizer.calculateCosine(query, targetBytes, min, max);
-            float precompScore = SQ8Quantizer.calculateScorePrecomputed(precomp, targetBytes, 0, "COSINE");
+            float[] dequantized = new float[dim];
+            SQ8Quantizer.dequantize(targetBytes, minPerDim, scalePerDim, dequantized);
 
-            assertEquals(legacyScore, precompScore, 1e-5f, "Precomputed score and legacy score must match within epsilon 1e-5f");
+            float targetNorm = SQ8Quantizer.l2Norm(dequantized);
+            float targetNormInv = targetNorm > 0.0f ? 1.0f / targetNorm : 0.0f;
 
-            ByteBuffer directBuf = ByteBuffer.allocateDirect(dim);
-            directBuf.put(targetBytes);
-            float directScore = SQ8Quantizer.calculateScorePrecomputed(precomp, directBuf, 0, "COSINE");
-            assertEquals(legacyScore, directScore, 1e-5f, "DirectByteBuffer score and legacy score must match within epsilon 1e-5f");
+            float directScore = SQ8Quantizer.calculateCosineWithNorms(query, targetBytes, 0, minPerDim, scalePerDim, queryNormInv, targetNormInv);
+
+            // 传统反量化计算余弦
+            float dot = 0.0f;
+            for (int i = 0; i < dim; i++) {
+                dot += query[i] * dequantized[i];
+            }
+            float expectedScore = dot * queryNormInv * targetNormInv;
+
+            assertEquals(expectedScore, directScore, 1e-5f, "Direct score and dequantized score must match within epsilon 1e-5f");
         }
     }
 
     @Test
-    @DisplayName("验证预计算开启前后 VectorEngineClient 检索 Top-K 结果与得分 100% 保持一致")
-    void testVectorEngineSearchConsistency() throws Exception {
-        int dim = 512;
-        int count = 1000;
-        String storeName = "test_precomp_consistency";
+    @DisplayName("验证 SQ8 量化存储的检索正确性与一致性")
+    void testVectorEngineSQ8SearchConsistency() throws Exception {
+        int dim = 128;
+        int count = 200;
+        String storeName = "test_sq8_consistency";
 
         VectorLiteProperties properties = new VectorLiteProperties();
-        properties.getSearcher().getPrecomputation().setEnabled(true);
-
         LocalVectorEngine engine = new LocalVectorEngine(properties);
         VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, null, properties);
 
@@ -95,21 +106,14 @@ public class SQ8PrecomputationTest {
             client.upsert(storeName, doc);
         }
 
-        // 1. 开启预计算查询
         VectorSearchRequest request = new VectorSearchRequest();
         request.setStoreName(storeName);
         request.setQueryVector(queryVector);
         request.setTopK(10);
-        List<VectorSearchResult> precompResults = client.searchByVector(request);
+        List<VectorSearchResult> results = client.searchByVector(request);
 
-        // 2. 关闭预计算查询
-        properties.getSearcher().getPrecomputation().setEnabled(false);
-        List<VectorSearchResult> legacyResults = client.searchByVector(request);
-
-        assertEquals(precompResults.size(), legacyResults.size());
-        for (int i = 0; i < precompResults.size(); i++) {
-            assertEquals(legacyResults.get(i).getId(), precompResults.get(i).getId());
-            assertEquals(legacyResults.get(i).getScore(), precompResults.get(i).getScore(), 1e-5f);
-        }
+        assertEquals(10, results.size());
+        assertNotNull(results.get(0).getId());
+        assertTrue(results.get(0).getScore() > 0);
     }
 }

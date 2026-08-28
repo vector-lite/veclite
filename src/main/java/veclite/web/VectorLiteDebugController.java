@@ -17,7 +17,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("${veclite.web.base-path:/veclite/api/v1}")
 @ConditionalOnProperty(name = "veclite.web.enabled", havingValue = "true")
-@CrossOrigin(origins = "${veclite.web.allowed-origins:*}")
+@CrossOrigin(origins = "*")
 @Tag(name = "VecLite", description = "Local vector search engine endpoints")
 public class VectorLiteDebugController {
 
@@ -33,6 +33,24 @@ public class VectorLiteDebugController {
     @GetMapping("/stores")
     public List<String> listStores() {
         return storeManager.listStores();
+    }
+
+    @Operation(summary = "List all vector stores with details (dimension, metric, docCount, storageSource, etc.)")
+    @GetMapping("/stores/_details")
+    public List<VectorStoreStats> listStoresWithDetails() {
+        List<String> names = storeManager.listStores();
+        List<VectorStoreStats> result = new java.util.ArrayList<>(names.size());
+        for (String name : names) {
+            try {
+                result.add(client.stats(name));
+            } catch (Exception e) {
+                VectorStoreStats fallback = new VectorStoreStats();
+                fallback.setStoreName(name);
+                fallback.setStorageSource("UNKNOWN");
+                result.add(fallback);
+            }
+        }
+        return result;
     }
 
     @Operation(summary = "Create a new vector store")

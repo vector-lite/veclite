@@ -234,6 +234,48 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
         return new File(basePath, storeName);
     }
 
+    /**
+     * 列出 basePath 下所有包含 store.json 的子目录名称作为 store 名。
+     * SNAPSHOT_FILE 模式下没有"远端目录"概念，本地有什么就是什么。
+     */
+    @Override
+    public List<String> listStoreNames() {
+        String basePath = properties.getStorage().getSnapshotFile().getBasePath();
+        File root = new File(basePath);
+        if (!root.isDirectory()) {
+            return new ArrayList<>();
+        }
+        List<String> result = new ArrayList<>();
+        File[] children = root.listFiles(File::isDirectory);
+        if (children == null) {
+            return result;
+        }
+        for (File child : children) {
+            File storeJson = new File(child, "store.json");
+            if (storeJson.isFile()) {
+                result.add(child.getName());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 从本地 store.json 反序列化出 VectorStoreDefinition。
+     * 文件不存在或损坏时返回 null，调用方按"跳过"处理。
+     */
+    @Override
+    public VectorStoreDefinition loadStoreDefinition(String storeName) {
+        File storeJson = new File(getStoreDir(storeName), "store.json");
+        if (!storeJson.isFile()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(storeJson, VectorStoreDefinition.class);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
     private boolean deleteDirectory(File dir) {
         File[] files = dir.listFiles();
         if (files != null) {

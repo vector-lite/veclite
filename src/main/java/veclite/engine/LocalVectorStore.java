@@ -717,6 +717,22 @@ public class LocalVectorStore {
         return sq8Frozen ? sq8Size : calibrationCount;
     }
 
+    /**
+     * v2.4 兼容：payload 与 vector 共用同一 buffer 的同号位置，
+     * 因此其 size 与 {@link #getVectorBufferSize()} 相等。
+     */
+    public int getPayloadSize() {
+        return getVectorBufferSize();
+    }
+
+    /**
+     * v2.4 兼容：id 索引按 buffer 顺序写入，
+     * 因此其 size 与 {@link #getVectorBufferSize()} 相等。
+     */
+    public int getIdIndexSize() {
+        return getVectorBufferSize();
+    }
+
     public boolean isOffsetDeleted(int offset) {
         return deletedBitSet.isDeleted(offset);
     }

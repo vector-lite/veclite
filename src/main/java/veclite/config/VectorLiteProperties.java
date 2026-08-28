@@ -156,6 +156,7 @@ public class VectorLiteProperties {
         private SnapshotFileConfig snapshotFile = new SnapshotFileConfig();
         private OffHeapConfig offHeap = new OffHeapConfig();
         private PayloadConfig payload = new PayloadConfig();
+        private OssConfig oss = new OssConfig();
 
         public StorageType getType() {
             return type;
@@ -187,6 +188,75 @@ public class VectorLiteProperties {
 
         public void setPayload(PayloadConfig payload) {
             this.payload = payload;
+        }
+
+        public OssConfig getOss() {
+            return oss;
+        }
+
+        public void setOss(OssConfig oss) {
+            this.oss = oss;
+        }
+    }
+
+    public static class OssConfig {
+        private String endpoint;
+        private String accessKeyId;
+        private String accessKeySecret;
+        private String bucket;
+        private String keyPrefix = "veclite/";
+        private int retryTimes = 3;
+        private long retryBackoffMs = 500L;
+        private int connectTimeoutMs = 5000;
+        private int readTimeoutMs = 30000;
+
+        public String getEndpoint() { return endpoint; }
+        public void setEndpoint(String endpoint) { this.endpoint = endpoint; }
+
+        public String getAccessKeyId() { return accessKeyId; }
+        public void setAccessKeyId(String accessKeyId) { this.accessKeyId = accessKeyId; }
+
+        public String getAccessKeySecret() { return accessKeySecret; }
+        public void setAccessKeySecret(String accessKeySecret) { this.accessKeySecret = accessKeySecret; }
+
+        public String getBucket() { return bucket; }
+        public void setBucket(String bucket) { this.bucket = bucket; }
+
+        public String getKeyPrefix() { return keyPrefix; }
+        public void setKeyPrefix(String keyPrefix) { this.keyPrefix = keyPrefix; }
+
+        public int getRetryTimes() { return retryTimes; }
+        public void setRetryTimes(int retryTimes) { this.retryTimes = retryTimes; }
+
+        public long getRetryBackoffMs() { return retryBackoffMs; }
+        public void setRetryBackoffMs(long retryBackoffMs) { this.retryBackoffMs = retryBackoffMs; }
+
+        public int getConnectTimeoutMs() { return connectTimeoutMs; }
+        public void setConnectTimeoutMs(int connectTimeoutMs) { this.connectTimeoutMs = connectTimeoutMs; }
+
+        public int getReadTimeoutMs() { return readTimeoutMs; }
+        public void setReadTimeoutMs(int readTimeoutMs) { this.readTimeoutMs = readTimeoutMs; }
+    }
+
+    private ConsistencyConfig consistency = new ConsistencyConfig();
+
+    public ConsistencyConfig getConsistency() {
+        return consistency;
+    }
+
+    public void setConsistency(ConsistencyConfig consistency) {
+        this.consistency = consistency;
+    }
+
+    public static class ConsistencyConfig {
+        private boolean strict = false;
+
+        public boolean isStrict() {
+            return strict;
+        }
+
+        public void setStrict(boolean strict) {
+            this.strict = strict;
         }
     }
 
@@ -270,6 +340,8 @@ public class VectorLiteProperties {
         private String version = "1";
         private String provider = "http";
         private String url;
+        private String apiKey;
+        private int dimension = 0;
         private int timeoutMillis = 1000;
         private int batchSize = 8;
 
@@ -303,6 +375,22 @@ public class VectorLiteProperties {
 
         public void setUrl(String url) {
             this.url = url;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
+        public int getDimension() {
+            return dimension;
+        }
+
+        public void setDimension(int dimension) {
+            this.dimension = dimension;
         }
 
         public int getTimeoutMillis() {

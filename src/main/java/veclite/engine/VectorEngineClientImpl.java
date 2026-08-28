@@ -135,7 +135,8 @@ public class VectorEngineClientImpl implements VectorEngineClient {
         for (VectorDocument doc : docs) {
             texts.add(doc.getText());
         }
-        List<List<Float>> embedded = embeddingService.embedTexts(modelName, modelVersion, texts);
+        int targetDim = store.getDefinition().getDimension();
+        List<List<Float>> embedded = embeddingService.embedTexts(modelName, modelVersion, texts, targetDim);
         for (int i = 0; i < docs.size(); i++) {
             List<Float> list = embedded.get(i);
             float[] vec = new float[list.size()];
@@ -176,8 +177,9 @@ public class VectorEngineClientImpl implements VectorEngineClient {
             throw new IllegalStateException("No EmbeddingProvider or embedding model configured for store: " + request.getStoreName());
         }
 
-        // 调用 Embedding 模型计算查询文本的向量
-        List<Float> floatList = embeddingService.embed(modelName, modelVersion, request.getQueryText());
+        // 调用 Embedding 模型计算查询文本的向量，传入 store 期望的维度
+        int targetDim = localVectorEngine.getStore(request.getStoreName()).getDefinition().getDimension();
+        List<Float> floatList = embeddingService.embed(modelName, modelVersion, request.getQueryText(), targetDim);
         float[] vector = new float[floatList.size()];
         for (int i = 0; i < floatList.size(); i++) {
             vector[i] = floatList.get(i);
@@ -233,7 +235,24 @@ public class VectorEngineClientImpl implements VectorEngineClient {
      */
     @Override
     public VectorStoreStats stats(String storeName) {
-        return localVectorEngine.stats(storeName);
+        VectorStoreStats stats = localVectorEngine.stats(storeName);
+        stats.setStorageSource(detectStorageSource());
+        // 把 store 的 embeddingModel 一起带上，前端创建时填了什么一目了然
+        try {
+            stats.setEmbeddingModel(localVectorEngine.getStore(storeName)
+                    .getDefinition().getEmbeddingModel());
+        } catch (Exception ignored) {
+            stats.setEmbeddingModel(null);
+        }
+        return stats;
+    }
+
+    private String detectStorageSource() {
+        String cls = persistence.getClass().getSimpleName();
+        if (cls.contains("Oss")) return "OSS";
+        if (cls.contains("SnapshotFile")) return "LOCAL";
+        if (cls.contains("Noop")) return "IN_MEMORY";
+        return "UNKNOWN";
     }
 
     /**

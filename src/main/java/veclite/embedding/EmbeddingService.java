@@ -102,21 +102,27 @@ public class EmbeddingService {
     // -------------------- 向量化调用 --------------------
 
     /**
-     * 单条文本向量化。
+     * 单条文本向量化。{@code dimension} 0=不指定。
      */
-    public List<Float> embed(String modelName, String modelVersion, String text) {
+    public List<Float> embed(String modelName, String modelVersion, String text, int dimension) {
         if (provider == null) {
             throw new IllegalStateException("No EmbeddingProvider available for embedding model [" + modelName + "].");
         }
-        return provider.embed(modelName, resolveVersion(modelName, modelVersion), text);
+        return provider.embed(modelName, resolveVersion(modelName, modelVersion), text, dimension);
+    }
+
+    /** 兼容旧调用：未指定 dimension */
+    public List<Float> embed(String modelName, String modelVersion, String text) {
+        return embed(modelName, modelVersion, text, 0);
     }
 
     /**
      * 批量文本向量化：按模型配置的 batchSize 分批调用 Embedding 服务。
+     * {@code dimension} 0=不指定。
      *
      * @return 与输入文本顺序一致的向量列表
      */
-    public List<List<Float>> embedTexts(String modelName, String modelVersion, List<String> texts) {
+    public List<List<Float>> embedTexts(String modelName, String modelVersion, List<String> texts, int dimension) {
         if (provider == null) {
             throw new IllegalStateException("No EmbeddingProvider available for embedding model [" + modelName + "].");
         }
@@ -126,15 +132,20 @@ public class EmbeddingService {
         for (int from = 0; from < texts.size(); from += batchSize) {
             int to = Math.min(from + batchSize, texts.size());
             List<String> chunk = texts.subList(from, to);
-            List<List<Float>> embedded = provider.embedBatch(modelName, resolvedVersion, new ArrayList<>(chunk));
+            List<List<Float>> embedded = provider.embedBatch(modelName, resolvedVersion, new ArrayList<>(chunk), dimension);
             if (embedded == null || embedded.size() != chunk.size()) {
-                throw new IllegalStateException("Embedding service returned " 
+                throw new IllegalStateException("Embedding service returned "
                         + (embedded == null ? 0 : embedded.size()) + " vectors for " + chunk.size()
                         + " input texts (model: " + modelName + ", version: " + resolvedVersion + ").");
             }
             result.addAll(embedded);
         }
         return result;
+    }
+
+    /** 兼容旧调用：未指定 dimension */
+    public List<List<Float>> embedTexts(String modelName, String modelVersion, List<String> texts) {
+        return embedTexts(modelName, modelVersion, texts, 0);
     }
 
     // -------------------- 内部工具 --------------------

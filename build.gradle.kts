@@ -33,6 +33,7 @@ dependencies {
     implementation("com.fasterxml.jackson.core:jackson-databind")
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springdoc:springdoc-openapi-ui:1.7.0")
+    implementation("com.aliyun.oss:aliyun-sdk-oss:3.17.4")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }

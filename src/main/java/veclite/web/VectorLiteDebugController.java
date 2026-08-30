@@ -6,9 +6,14 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import veclite.api.VectorEngineClient;
 import veclite.api.VectorStoreDefinition;
 import veclite.api.VectorStoreManager;
+import veclite.embedding.EmbeddingModelRegistry;
+import veclite.embedding.EmbeddingService;
+import veclite.config.VectorLiteProperties;
 import veclite.model.*;
+import veclite.persistence.VectorPersistenceStorage;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -23,10 +28,61 @@ public class VectorLiteDebugController {
 
     private final VectorEngineClient client;
     private final VectorStoreManager storeManager;
+    private final EmbeddingService embeddingService;
+    private final VectorPersistenceStorage persistence;
+    private final EmbeddingModelRegistry embeddingRegistry;
 
-    public VectorLiteDebugController(VectorEngineClient client, VectorStoreManager storeManager) {
+    public VectorLiteDebugController(VectorEngineClient client, VectorStoreManager storeManager,
+                                     EmbeddingService embeddingService, VectorPersistenceStorage persistence,
+                                     EmbeddingModelRegistry embeddingRegistry) {
         this.client = client;
         this.storeManager = storeManager;
+        this.embeddingService = embeddingService;
+        this.persistence = persistence;
+        this.embeddingRegistry = embeddingRegistry;
+    }
+
+    @Operation(summary = "Save (create or update) an embedding data source")
+    @PostMapping("/embedding/models")
+    public Map<String, String> saveEmbeddingModel(@RequestBody EmbeddingModelInfo model) {
+        embeddingRegistry.save(toModelConfig(model));
+        // 数据源补配后恢复启动时因缺模型被跳过的存量 Store
+        client.rediscoverPersistedStores();
+        return success();
+    }
+
+    @Operation(summary = "Set an embedding data source as the default model")
+    @PostMapping("/embedding/models/{name}/default")
+    public Map<String, String> setDefaultEmbeddingModel(
+            @Parameter(description = "Model name") @PathVariable String name,
+            @Parameter(description = "Model version; omitted resolves to the primary version of the name")
+            @RequestParam(required = false) String version) {
+        embeddingRegistry.saveDefault(name, version);
+        return success();
+    }
+
+    @Operation(summary = "Delete a managed embedding data source (yml built-in models cannot be deleted)")
+    @DeleteMapping("/embedding/models/{name}")
+    public Map<String, String> deleteEmbeddingModel(
+            @Parameter(description = "Model name") @PathVariable String name,
+            @Parameter(description = "Model version; omitted resolves to the primary version of the name")
+            @RequestParam(required = false) String version) {
+        embeddingRegistry.delete(name, version);
+        return success();
+    }
+
+    private VectorLiteProperties.ModelConfig toModelConfig(EmbeddingModelInfo model) {
+        if (model == null || model.getName() == null || model.getName().isBlank()) {
+            throw new IllegalArgumentException("Embedding model name is required");
+        }
+        VectorLiteProperties.ModelConfig config = new VectorLiteProperties.ModelConfig();
+        config.setName(model.getName().trim());
+        config.setVersion(model.getVersion());
+        config.setProvider(model.getProvider());
+        config.setUrl(model.getUrl());
+        config.setTimeoutMillis(model.getTimeoutMillis());
+        config.setBatchSize(model.getBatchSize());
+        return config;
     }
 
     @Operation(summary = "List all vector stores")
@@ -55,6 +111,8 @@ public class VectorLiteDebugController {
     @DeleteMapping("/stores/{storeName}")
     public Map<String, String> dropStore(
             @Parameter(description = "Store name") @PathVariable String storeName) {
+        // 同时删除持久化数据（快照目录 / 文档真相源），防止重启后已删除的 Store 复活
+        persistence.deleteStore(storeName);
         storeManager.dropStore(storeName);
         return success();
     }
@@ -66,6 +124,23 @@ public class VectorLiteDebugController {
             @RequestBody VectorDocument document) {
         client.upsert(storeName, document);
         return success();
+    }
+
+    @Operation(summary = "Upsert a batch of documents into a store (text-only docs are auto-embedded)")
+    @PostMapping("/stores/{storeName}/documents/batch")
+    public Map<String, String> upsertBatch(
+            @Parameter(description = "Store name") @PathVariable String storeName,
+            @RequestBody List<VectorDocument> documents) {
+        client.upsertBatch(storeName, documents);
+        return success();
+    }
+
+    @Operation(summary = "Get a single document by ID (including its vector)")
+    @GetMapping("/stores/{storeName}/documents/{documentId}")
+    public VectorDocument getDocument(
+            @Parameter(description = "Store name") @PathVariable String storeName,
+            @Parameter(description = "Document ID") @PathVariable String documentId) {
+        return client.getDocument(storeName, documentId);
     }
 
     @Operation(summary = "List documents in a vector store")
@@ -121,7 +196,20 @@ public class VectorLiteDebugController {
         return success();
     }
 
+    @Operation(summary = "List configured embedding service endpoints")
+    @GetMapping("/embedding/models")
+    public List<EmbeddingModelInfo> listEmbeddingModels() {
+        return embeddingService.listModels();
+    }
+
     private Map<String, String> success() {
         return Map.of("status", "SUCCESS");
+    }
+
+    /** 参数类异常统一映射为 400 并透出原因，便于前端 toast 展示 */
+    @ExceptionHandler(IllegalArgumentException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, String> handleIllegalArgument(IllegalArgumentException e) {
+        return Map.of("error", e.getMessage() == null ? "Invalid request" : e.getMessage());
     }
 }

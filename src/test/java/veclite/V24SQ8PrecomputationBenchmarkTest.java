@@ -50,7 +50,7 @@ public class V24SQ8PrecomputationBenchmarkTest {
 
         LocalVectorEngine engine = new LocalVectorEngine(properties);
         VectorPersistenceStorage storage = new SnapshotFileStorage(properties);
-        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, storage, properties);
+        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, storage, properties, null);
 
         VectorStoreDefinition definition = new VectorStoreDefinition();
         definition.setStoreName(storeName);

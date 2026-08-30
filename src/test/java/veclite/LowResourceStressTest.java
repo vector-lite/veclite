@@ -48,7 +48,7 @@ public class LowResourceStressTest {
             // 初始化 Store 并填充数据
             VectorLiteProperties properties = new VectorLiteProperties();
             LocalVectorEngine engine = new LocalVectorEngine();
-            VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, new NoopVectorPersistenceStorage(), properties);
+            VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, new NoopVectorPersistenceStorage(), properties, null);
 
             String storeName = "stress_store_" + datasetSize;
             VectorStoreDefinition definition = new VectorStoreDefinition();

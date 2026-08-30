@@ -6,20 +6,16 @@ veclite:
   web:
     enabled: true
     base-path: /veclite/api/v1
-  # Embedding 接口管理：模型名称 + 版本是绑定 Store 的重要参数（绑定后不可变）
-  embedding:
-    default-model: text-embedding-demo
-    models:
-      text-embedding-demo:
-        name: text-embedding-demo
-        version: "1"
-        provider: http
-        url: http://localhost:9000/api/embed
-        timeout-millis: 3000
-        batch-size: 16
+  # Embedding 数据源已改为数据库维护：通过数据源管理页或 /embedding/models 接口增删改查
   storage:
-    type: SNAPSHOT_FILE
-    snapshot-file:
+    type: MONGODB
+    mongodb:
+      uri: mongodb://admin:12345678@localhost:27017/?authSource=admin
+      database: veclite
+      document-collection: veclite_document
+      meta-collection: veclite_store_meta
+      scan-batch-size: 1000
+    snapshot-file:            # 切回 SNAPSHOT_FILE 模式时生效
       base-path: ./data/vector-lite
       flush-interval-seconds: 30
       flush-on-shutdown: true

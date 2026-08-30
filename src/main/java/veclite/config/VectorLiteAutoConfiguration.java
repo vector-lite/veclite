@@ -3,12 +3,17 @@ package veclite.config;
 import veclite.api.EmbeddingProvider;
 import veclite.api.VectorEngineClient;
 import veclite.api.VectorStoreManager;
+import veclite.embedding.EmbeddingModelRegistry;
+import veclite.embedding.EmbeddingModelStore;
 import veclite.embedding.EmbeddingService;
 import veclite.embedding.HttpEmbeddingProvider;
 import veclite.engine.LocalVectorEngine;
 import veclite.engine.VectorEngineClientImpl;
 import veclite.model.StorageType;
 import veclite.persistence.NoopVectorPersistenceStorage;
+import veclite.persistence.mongo.MongoEmbeddingModelStore;
+import veclite.persistence.mongo.MongoVectorDocumentRepository;
+import veclite.persistence.mongo.MongoVectorPersistenceStorage;
 import veclite.persistence.SnapshotFileStorage;
 import veclite.persistence.VectorPersistenceStorage;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -33,22 +38,42 @@ import veclite.web.VectorLiteUiController;
 public class VectorLiteAutoConfiguration {
 
     /**
-     * 默认的 HTTP Embedding 提供者组件
+     * Embedding 模型配置注册中心（数据库维护）。
+     * MONGODB 模式下持久化到 veclite_embedding_model 集合；其余模式仅内存生效（重启丢失）。
      */
     @Bean
     @ConditionalOnMissingBean
-    public EmbeddingProvider embeddingProvider(VectorLiteProperties properties) {
-        return new HttpEmbeddingProvider(properties);
+    public EmbeddingModelRegistry embeddingModelRegistry(VectorLiteProperties properties) {
+        EmbeddingModelStore store = null;
+        if (properties.getStorage().getType() == StorageType.MONGODB) {
+            store = new MongoEmbeddingModelStore(properties);
+        }
+        return new EmbeddingModelRegistry(store);
     }
 
     /**
-     * 根据配置文件类型 (`veclite.storage.type`) 装配持久化存储策略组件
+     * 默认的 HTTP Embedding 提供者组件（模型配置经注册中心解析）
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public EmbeddingProvider embeddingProvider(EmbeddingModelRegistry registry) {
+        return new HttpEmbeddingProvider(registry);
+    }
+
+    /**
+     * 根据配置文件类型 (`veclite.storage.type`) 装配持久化存储策略组件。
+     * MongoDB 编排器持有底层连接，容器销毁时由 Spring 推断调用 close() 释放。
      */
     @Bean
     @ConditionalOnMissingBean
     public VectorPersistenceStorage vectorPersistenceStorage(VectorLiteProperties properties) {
-        if (properties.getStorage().getType() == StorageType.SNAPSHOT_FILE) {
+        StorageType type = properties.getStorage().getType();
+        if (type == StorageType.SNAPSHOT_FILE) {
             return new SnapshotFileStorage(properties);
+        }
+        if (type == StorageType.MONGODB) {
+            return new MongoVectorPersistenceStorage(
+                    new MongoVectorDocumentRepository(properties), properties);
         }
         return new NoopVectorPersistenceStorage();
     }
@@ -58,8 +83,9 @@ public class VectorLiteAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public EmbeddingService embeddingService(EmbeddingProvider embeddingProvider, VectorLiteProperties properties) {
-        return new EmbeddingService(embeddingProvider, properties);
+    public EmbeddingService embeddingService(EmbeddingProvider embeddingProvider,
+                                             EmbeddingModelRegistry registry) {
+        return new EmbeddingService(embeddingProvider, registry);
     }
 
     /**
@@ -88,7 +114,9 @@ public class VectorLiteAutoConfiguration {
     public VectorEngineClient vectorEngineClient(LocalVectorEngine localVectorEngine,
                                                  EmbeddingProvider embeddingProvider,
                                                  VectorPersistenceStorage vectorPersistenceStorage,
-                                                 VectorLiteProperties properties) {
-        return new VectorEngineClientImpl(localVectorEngine, embeddingProvider, vectorPersistenceStorage, properties);
+                                                 VectorLiteProperties properties,
+                                                 EmbeddingModelRegistry embeddingModelRegistry) {
+        return new VectorEngineClientImpl(localVectorEngine, embeddingProvider,
+                vectorPersistenceStorage, properties, embeddingModelRegistry);
     }
 }

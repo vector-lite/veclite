@@ -9,12 +9,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-@ConfigurationProperties(prefix = "veclite")
+@ConfigurationProperties(prefix = "veclite", ignoreInvalidFields = true)
 public class VectorLiteProperties {
     private boolean enabled = true;
     private WebConfig web = new WebConfig();
     private StorageConfig storage = new StorageConfig();
-    private EmbeddingConfig embedding = new EmbeddingConfig();
     private Map<String, StoreConfig> stores = new HashMap<>();
 
     public boolean isEnabled() {
@@ -39,14 +38,6 @@ public class VectorLiteProperties {
 
     public void setStorage(StorageConfig storage) {
         this.storage = storage;
-    }
-
-    public EmbeddingConfig getEmbedding() {
-        return embedding;
-    }
-
-    public void setEmbedding(EmbeddingConfig embedding) {
-        this.embedding = embedding;
     }
 
     public Map<String, StoreConfig> getStores() {
@@ -156,6 +147,7 @@ public class VectorLiteProperties {
         private SnapshotFileConfig snapshotFile = new SnapshotFileConfig();
         private OffHeapConfig offHeap = new OffHeapConfig();
         private PayloadConfig payload = new PayloadConfig();
+        private MongoConfig mongodb = new MongoConfig();
 
         public StorageType getType() {
             return type;
@@ -187,6 +179,72 @@ public class VectorLiteProperties {
 
         public void setPayload(PayloadConfig payload) {
             this.payload = payload;
+        }
+
+        public MongoConfig getMongodb() {
+            return mongodb;
+        }
+
+        public void setMongodb(MongoConfig mongodb) {
+            this.mongodb = mongodb;
+        }
+    }
+
+    /** MongoDB 单一真相源持久化（StorageType.MONGODB）的连接与集合配置 */
+    public static class MongoConfig {
+        private String uri = "mongodb://localhost:27017";
+        private String database = "veclite";
+        private String documentCollection = "veclite_document";
+        private String metaCollection = "veclite_store_meta";
+        private String embeddingModelCollection = "veclite_embedding_model";
+        private int scanBatchSize = 1000;
+
+        public String getUri() {
+            return uri;
+        }
+
+        public void setUri(String uri) {
+            this.uri = uri;
+        }
+
+        public String getDatabase() {
+            return database;
+        }
+
+        public void setDatabase(String database) {
+            this.database = database;
+        }
+
+        public String getDocumentCollection() {
+            return documentCollection;
+        }
+
+        public void setDocumentCollection(String documentCollection) {
+            this.documentCollection = documentCollection;
+        }
+
+        public String getMetaCollection() {
+            return metaCollection;
+        }
+
+        public void setMetaCollection(String metaCollection) {
+            this.metaCollection = metaCollection;
+        }
+
+        public String getEmbeddingModelCollection() {
+            return embeddingModelCollection;
+        }
+
+        public void setEmbeddingModelCollection(String embeddingModelCollection) {
+            this.embeddingModelCollection = embeddingModelCollection;
+        }
+
+        public int getScanBatchSize() {
+            return scanBatchSize;
+        }
+
+        public void setScanBatchSize(int scanBatchSize) {
+            this.scanBatchSize = scanBatchSize;
         }
     }
 
@@ -244,34 +302,13 @@ public class VectorLiteProperties {
         }
     }
 
-    public static class EmbeddingConfig {
-        private String defaultModel;
-        private Map<String, ModelConfig> models = new HashMap<>();
-
-        public String getDefaultModel() {
-            return defaultModel;
-        }
-
-        public void setDefaultModel(String defaultModel) {
-            this.defaultModel = defaultModel;
-        }
-
-        public Map<String, ModelConfig> getModels() {
-            return models;
-        }
-
-        public void setModels(Map<String, ModelConfig> models) {
-            this.models = models;
-        }
-    }
-
     public static class ModelConfig {
         private String name;
         private String version = "1";
         private String provider = "http";
         private String url;
         private int timeoutMillis = 1000;
-        private int batchSize = 8;
+        private int batchSize = 1;
 
         public String getName() {
             return name;

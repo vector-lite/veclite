@@ -78,7 +78,7 @@ public class SQ8PrecomputationTest {
 
         VectorLiteProperties properties = new VectorLiteProperties();
         LocalVectorEngine engine = new LocalVectorEngine(properties);
-        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, null, properties);
+        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, null, properties, null);
 
         VectorStoreDefinition definition = new VectorStoreDefinition();
         definition.setStoreName(storeName);

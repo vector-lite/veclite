@@ -8,28 +8,28 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import veclite.engine.LocalVectorEngine;
 import veclite.engine.LocalVectorStore;
-import veclite.persistence.meta.VectorMetadataRepository;
-import veclite.persistence.meta.VectorStoreMetadata;
 
 import javax.annotation.PreDestroy;
-import java.time.Instant;
 import java.util.List;
 
 /**
  * 定时刷盘调度器：每 N 秒把内存中所有 store 同步到持久化后端。
- * <p>解决"upsert 后没主动 saveStore → 进程崩溃丢 30s 数据"的风险。
+ * <p>
+ * 解决"upsert 后没主动 saveStore → 进程崩溃丢一个刷盘窗口的数据"的风险。
+ * 对 {@link StorageType#SNAPSHOT_FILE} 这类"内存为准、定期落盘"的后端是必需的；
+ * 对单一真相源后端（MONGODB / POSTGRES）写入即持久化，本调度器退化为一次幂等对账，
+ * 用于修复真相源中可能存在的漂移，开销可控。
  *
  * <h3>行为</h3>
  * <ul>
  *   <li>固定间隔（默认 30s）遍历 {@link LocalVectorEngine#listStores} 拿到所有 store</li>
- *   <li>逐个调 {@link VectorPersistenceStorage#saveStore} 写本地 + OSS</li>
- *   <li>saveStore 失败不抛 — 内存数据保留，下次再尝试</li>
+ *   <li>逐个调 {@link VectorPersistenceStorage#saveStore} 落盘</li>
+ *   <li>单个 store 失败不抛 — 内存数据保留，下次再尝试</li>
  * </ul>
  *
  * <h3>并发</h3>
- * <p>{@link OssSnapshotStorage#saveStore} 自身是 {@code synchronized} 的，
- * 且 saveStore 是 CPU+网络密集型（3 个 PutObject 串行），单线程顺序刷即可，
- * 多线程并发刷同一个 store 反而会拖慢。
+ * <p>各实现的 {@code saveStore} 自身是 {@code synchronized} 的，且落盘是 CPU + IO 密集型，
+ * 单线程顺序刷即可；多线程并发刷同一个 store 反而会互相拖慢。
  */
 @Component
 public class FlushScheduler {
@@ -39,28 +39,23 @@ public class FlushScheduler {
     private final LocalVectorEngine engine;
     private final VectorPersistenceStorage persistence;
     private final boolean flushOnShutdown;
-    private final VectorMetadataRepository metadataRepository;
 
     @Autowired
     public FlushScheduler(LocalVectorEngine engine, VectorPersistenceStorage persistence,
                           @Value("${veclite.storage.snapshot-file.flush-on-shutdown:true}")
-                          boolean flushOnShutdown,
-                          @org.springframework.beans.factory.annotation.Autowired(required = false)
-                          VectorMetadataRepository metadataRepository) {
+                          boolean flushOnShutdown) {
         this.engine = engine;
         this.persistence = persistence;
         this.flushOnShutdown = flushOnShutdown;
-        this.metadataRepository = metadataRepository;
     }
 
     /**
-     * 兜底构造器：bean 不可用时 no-op。
+     * 兜底构造器：bean 不可用时 no-op，保证非 Spring 场景（单元测试、纯 SDK 用法）也能实例化。
      */
     public FlushScheduler() {
         this.engine = null;
         this.persistence = null;
         this.flushOnShutdown = false;
-        this.metadataRepository = null;
     }
 
     @Scheduled(
@@ -83,13 +78,6 @@ public class FlushScheduler {
             try {
                 LocalVectorStore store = engine.getStore(storeName);
                 persistence.saveStore(store);
-                // v2.4 hybrid persistence: OSS 落盘成功后，写 PG 指针让 replica 感知新版本
-                if (metadataRepository != null) {
-                    String snapshotVersion = "v_" + Instant.now().toEpochMilli();
-                    String ossPath = buildOssPath(storeName, snapshotVersion);
-                    int activeCount = store.getActiveCount();
-                    metadataRepository.updateSnapshotPointer(storeName, snapshotVersion, ossPath, activeCount);
-                }
                 success++;
             } catch (Exception e) {
                 failed++;
@@ -103,16 +91,7 @@ public class FlushScheduler {
     }
 
     /**
-     * 构造 OSS 路径：oss://{bucket}/{keyPrefix}/{storeName}/{snapshotVersion}/
-     */
-    private String buildOssPath(String storeName, String snapshotVersion) {
-        VectorStoreMetadata meta = metadataRepository.findByName(storeName).orElse(null);
-        String prefix = meta == null ? "" : "";
-        return "veclite/" + storeName + "/" + snapshotVersion + "/";
-    }
-
-    /**
-     * 容器关闭时同步刷盘：补齐 FlushScheduler 30s 窗口外的最后一击。
+     * 容器关闭时同步刷盘：补齐定时窗口外的最后一击。
      * <p>受 {@code veclite.storage.snapshot-file.flush-on-shutdown} 控制（默认 true）。
      * <p>注意：K8s 滚动更新时容器在 {@code terminationGracePeriodSeconds}（默认 30s）内被强杀，
      * 本方法必须在这段时间内完成；否则需要配合 preStop hook sleep 把数据写入窗口拉长。

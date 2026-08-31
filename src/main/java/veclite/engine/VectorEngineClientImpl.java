@@ -3,12 +3,16 @@ package veclite.engine;
 import veclite.api.EmbeddingProvider;
 import veclite.api.VectorEngineClient;
 import veclite.api.VectorStoreDefinition;
+import veclite.api.VectorStoreMetadata;
 import veclite.config.VectorLiteProperties;
 import veclite.embedding.EmbeddingService;
 import veclite.model.*;
+import veclite.embedding.EmbeddingModelRegistry;
+import veclite.persistence.DocumentBackedPersistence;
 import veclite.persistence.VectorPersistenceStorage;
-import veclite.persistence.meta.VectorMetadataRepository;
-import veclite.persistence.meta.VectorStoreMetadata;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
@@ -19,75 +23,44 @@ import java.util.List;
  */
 public class VectorEngineClientImpl implements VectorEngineClient {
 
+    private static final Logger log = LoggerFactory.getLogger(VectorEngineClientImpl.class);
+
     /** 本地向量引擎（管理 Store 实例映射） */
     private final LocalVectorEngine localVectorEngine;
-
+    
     /** 文本 Embedding 服务 */
     private final EmbeddingService embeddingService;
-
+    
     /** 持久化存储接口 */
     private final VectorPersistenceStorage persistence;
 
+    /** 文档型持久化编排端口（MongoDB 等单一真相源方案）；快照/Noop 实现下为 null，写透与发现逻辑自动旁路 */
+    private final DocumentBackedPersistence documentPersistence;
+
     /** 全局配置属性 */
     private final VectorLiteProperties properties;
-
-    /** PG 元数据仓储（可选，集群模式下存在） */
-    private final VectorMetadataRepository metadataRepository;
-
-    public VectorEngineClientImpl(LocalVectorEngine localVectorEngine,
-                                  EmbeddingProvider embeddingProvider,
-                                  VectorPersistenceStorage persistence,
-                                  VectorLiteProperties properties) {
-        this(localVectorEngine, embeddingProvider, persistence, properties, null);
-    }
 
     public VectorEngineClientImpl(LocalVectorEngine localVectorEngine,
                                   EmbeddingProvider embeddingProvider,
                                   VectorPersistenceStorage persistence,
                                   VectorLiteProperties properties,
-                                  VectorMetadataRepository metadataRepository) {
+                                  EmbeddingModelRegistry embeddingModelRegistry) {
         this.localVectorEngine = localVectorEngine;
-        this.embeddingService = embeddingProvider != null ? new EmbeddingService(embeddingProvider, properties) : null;
+        this.embeddingService = embeddingProvider != null
+                ? new EmbeddingService(embeddingProvider, embeddingModelRegistry) : null;
         this.persistence = persistence;
+        this.documentPersistence = persistence instanceof DocumentBackedPersistence documentBacked
+                ? documentBacked
+                : null;
         this.properties = properties;
-        this.metadataRepository = metadataRepository;
 
-        // 集群模式：先从 PG listAll 发现；单 pod 回退 yml
-        if (metadataRepository != null) {
-            initStoresFromPg();
-        } else {
-            initStoresFromProperties();
-        }
+        // 应用启动时，自动初始化配置中的 Store 并加载磁盘快照
+        initStoresFromProperties();
     }
 
     /**
-     * 集群模式：启动时从 PG listAll 发现所有 store 并加载。
-     */
-    private void initStoresFromPg() {
-        java.util.List<VectorStoreMetadata> all = metadataRepository.listAll();
-        for (VectorStoreMetadata m : all) {
-            try {
-                VectorStoreDefinition definition = new VectorStoreDefinition();
-                definition.setStoreName(m.getStoreName());
-                definition.setDimension(m.getDimension());
-                definition.setMetric(m.getMetric());
-                definition.setMaxCapacity(m.getMaxCapacity());
-                definition.setEmbeddingModel(m.getEmbeddingModel());
-                definition.setEmbeddingModelVersion(m.getEmbeddingModelVersion());
-                definition.setQuantization(m.getQuantization());
-                definition.setIndexedMetadataFields(m.getIndexedMetadataFields());
-                localVectorEngine.createStore(m.getStoreName(), definition);
-                LocalVectorStore store = localVectorEngine.getStore(m.getStoreName());
-                persistence.loadStore(store);
-            } catch (Exception e) {
-                org.slf4j.LoggerFactory.getLogger(VectorEngineClientImpl.class)
-                        .error("Failed to init store [{}] from PG: {}", m.getStoreName(), e.getMessage());
-            }
-        }
-    }
-
-    /**
-     * 单 pod 模式：根据 application.yml 中的配置初始化 VectorStore，并自动加载磁盘快照。
+     * 根据 application.yml 中的配置初始化 VectorStore，并自动加载本地持久化快照；
+     * 文档型持久化下额外执行元数据发现，恢复未在配置中声明的存量 Store。
      */
     private void initStoresFromProperties() {
         if (properties.getStores() != null) {
@@ -109,18 +82,57 @@ public class VectorEngineClientImpl implements VectorEngineClient {
                 persistence.loadStore(store);
             });
         }
+        discoverPersistedStores();
+    }
+
+    /**
+     * 启动双发现：文档型持久化下从真相源元数据中发现存量 Store，
+     * 补齐 properties 配置中未声明的库并按各自 persistenceMode 装载数据，
+     * 保证全局存储类型切换后存量库不"失明"。
+     */
+    private void discoverPersistedStores() {
+        if (documentPersistence == null) {
+            return;
+        }
+        for (VectorStoreMetadata metadata : documentPersistence.listStoreMetadata()) {
+            if (localVectorEngine.hasStore(metadata.getStoreName())) {
+                continue;
+            }
+            try {
+                localVectorEngine.createStore(metadata.getStoreName(), metadata.toDefinition());
+                LocalVectorStore store = localVectorEngine.getStore(metadata.getStoreName());
+                persistence.loadStore(store);
+            } catch (Exception e) {
+                // 单库装载失败（如绑定的 Embedding 数据源缺失）只跳过该库并告警，不阻断启动；
+                // 数据源补配后可通过 rediscoverPersistedStores 恢复
+                log.warn("Skip store [{}] from persistence discovery: {}",
+                        metadata.getStoreName(), e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public void rediscoverPersistedStores() {
+        discoverPersistedStores();
     }
 
     /**
      * 手动创建指定的向量库 Store。
+     * 文档型持久化下幂等装载真相源中的既有数据，并登记 Store 元数据。
      */
     @Override
     public void createStore(String storeName, VectorStoreDefinition definition) {
         localVectorEngine.createStore(storeName, definition);
+        if (documentPersistence != null) {
+            LocalVectorStore store = localVectorEngine.getStore(storeName);
+            persistence.loadStore(store);
+            documentPersistence.saveStoreMetadata(store);
+        }
     }
 
     /**
      * 单条写入/更新向量文档。
+     * 文档型持久化下先提交真相源（RPO=0），成功后再更新内存。
      */
     @Override
     public void upsert(String storeName, VectorDocument document) {
@@ -134,11 +146,15 @@ public class VectorEngineClientImpl implements VectorEngineClient {
         if (document.getVector() == null) {
             autoEmbed(store, List.of(document));
         }
+        if (documentPersistence != null) {
+            documentPersistence.upsertDocuments(store, List.of(document));
+        }
         store.upsert(document);
     }
 
     /**
      * 批量写入/更新向量文档。
+     * 文档型持久化下以批量写透提交真相源（RPO=0），成功后再更新内存。
      */
     @Override
     public void upsertBatch(String storeName, List<VectorDocument> documents) {
@@ -161,6 +177,9 @@ public class VectorEngineClientImpl implements VectorEngineClient {
         if (!needEmbed.isEmpty()) {
             autoEmbed(store, needEmbed);
         }
+        if (documentPersistence != null) {
+            documentPersistence.upsertDocuments(store, documents);
+        }
         for (VectorDocument doc : documents) {
             store.upsert(doc);
         }
@@ -179,8 +198,7 @@ public class VectorEngineClientImpl implements VectorEngineClient {
         for (VectorDocument doc : docs) {
             texts.add(doc.getText());
         }
-        int targetDim = store.getDefinition().getDimension();
-        List<List<Float>> embedded = embeddingService.embedTexts(modelName, modelVersion, texts, targetDim);
+        List<List<Float>> embedded = embeddingService.embedTexts(modelName, modelVersion, texts);
         for (int i = 0; i < docs.size(); i++) {
             List<Float> list = embedded.get(i);
             float[] vec = new float[list.size()];
@@ -215,15 +233,15 @@ public class VectorEngineClientImpl implements VectorEngineClient {
         String modelName = store.getDefinition().getEmbeddingModel();
         String modelVersion = store.getDefinition().getEmbeddingModelVersion();
         if (modelName == null) {
-            modelName = properties.getEmbedding().getDefaultModel();
+            // Store 未绑定模型时回退到数据库维护的默认模型
+            modelName = embeddingService != null ? embeddingService.defaultModelName() : null;
         }
         if (embeddingService == null || modelName == null) {
             throw new IllegalStateException("No EmbeddingProvider or embedding model configured for store: " + request.getStoreName());
         }
 
-        // 调用 Embedding 模型计算查询文本的向量，传入 store 期望的维度
-        int targetDim = localVectorEngine.getStore(request.getStoreName()).getDefinition().getDimension();
-        List<Float> floatList = embeddingService.embed(modelName, modelVersion, request.getQueryText(), targetDim);
+        // 调用 Embedding 模型计算查询文本的向量
+        List<Float> floatList = embeddingService.embed(modelName, modelVersion, request.getQueryText());
         float[] vector = new float[floatList.size()];
         for (int i = 0; i < floatList.size(); i++) {
             vector[i] = floatList.get(i);
@@ -245,19 +263,30 @@ public class VectorEngineClientImpl implements VectorEngineClient {
 
     /**
      * 根据 ID 列表批量删除文档。
+     * 文档型持久化下先删除真相源，成功后再更新内存位图。
      */
     @Override
     public DeleteResult deleteByIds(String storeName, List<String> ids) {
         LocalVectorStore store = localVectorEngine.getStore(storeName);
+        if (documentPersistence != null && ids != null && !ids.isEmpty()) {
+            documentPersistence.deleteDocuments(storeName, ids);
+        }
         return store.deleteByIds(ids);
     }
 
     /**
      * 根据元数据 Filter 条件条件删除文档。
+     * 文档型持久化下先取命中 ID 删除真相源，成功后再更新内存位图。
      */
     @Override
     public DeleteResult deleteByFilter(String storeName, FilterExpression filter) {
         LocalVectorStore store = localVectorEngine.getStore(storeName);
+        if (documentPersistence != null && filter != null) {
+            List<String> matchedIds = store.findIdsByFilter(filter);
+            if (!matchedIds.isEmpty()) {
+                documentPersistence.deleteDocuments(storeName, matchedIds);
+            }
+        }
         return store.deleteByFilter(filter);
     }
 
@@ -275,28 +304,20 @@ public class VectorEngineClientImpl implements VectorEngineClient {
     }
 
     /**
+     * 按 ID 精确查询单个文档，包含原始向量，供详情展示使用。
+     */
+    @Override
+    public VectorDocument getDocument(String storeName, String id) {
+        LocalVectorStore store = localVectorEngine.getStore(storeName);
+        return store.getDocument(id, true);
+    }
+
+    /**
      * 获取指定 Store 的容量与配置状态统计信息。
      */
     @Override
     public VectorStoreStats stats(String storeName) {
-        VectorStoreStats stats = localVectorEngine.stats(storeName);
-        stats.setStorageSource(detectStorageSource());
-        // 把 store 的 embeddingModel 一起带上，前端创建时填了什么一目了然
-        try {
-            stats.setEmbeddingModel(localVectorEngine.getStore(storeName)
-                    .getDefinition().getEmbeddingModel());
-        } catch (Exception ignored) {
-            stats.setEmbeddingModel(null);
-        }
-        return stats;
-    }
-
-    private String detectStorageSource() {
-        String cls = persistence.getClass().getSimpleName();
-        if (cls.contains("Oss")) return "OSS";
-        if (cls.contains("SnapshotFile")) return "LOCAL";
-        if (cls.contains("Noop")) return "IN_MEMORY";
-        return "UNKNOWN";
+        return localVectorEngine.stats(storeName);
     }
 
     /**

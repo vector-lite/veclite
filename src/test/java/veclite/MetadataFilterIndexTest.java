@@ -25,7 +25,7 @@ public class MetadataFilterIndexTest {
     void testBitSetFilterEQAndIN() {
         VectorLiteProperties properties = new VectorLiteProperties();
         LocalVectorEngine engine = new LocalVectorEngine(properties);
-        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, null, properties);
+        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, null, properties, null);
 
         String storeName = "filter_test_store";
         VectorStoreDefinition definition = new VectorStoreDefinition();

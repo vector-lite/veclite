@@ -9,12 +9,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-@ConfigurationProperties(prefix = "veclite")
+@ConfigurationProperties(prefix = "veclite", ignoreInvalidFields = true)
 public class VectorLiteProperties {
     private boolean enabled = true;
     private WebConfig web = new WebConfig();
     private StorageConfig storage = new StorageConfig();
-    private EmbeddingConfig embedding = new EmbeddingConfig();
     private Map<String, StoreConfig> stores = new HashMap<>();
 
     public boolean isEnabled() {
@@ -39,14 +38,6 @@ public class VectorLiteProperties {
 
     public void setStorage(StorageConfig storage) {
         this.storage = storage;
-    }
-
-    public EmbeddingConfig getEmbedding() {
-        return embedding;
-    }
-
-    public void setEmbedding(EmbeddingConfig embedding) {
-        this.embedding = embedding;
     }
 
     public Map<String, StoreConfig> getStores() {
@@ -156,7 +147,8 @@ public class VectorLiteProperties {
         private SnapshotFileConfig snapshotFile = new SnapshotFileConfig();
         private OffHeapConfig offHeap = new OffHeapConfig();
         private PayloadConfig payload = new PayloadConfig();
-        private OssConfig oss = new OssConfig();
+        private MongoConfig mongodb = new MongoConfig();
+        private PostgresConfig postgres = new PostgresConfig();
 
         public StorageType getType() {
             return type;
@@ -190,77 +182,152 @@ public class VectorLiteProperties {
             this.payload = payload;
         }
 
-        public OssConfig getOss() {
-            return oss;
+        public MongoConfig getMongodb() {
+            return mongodb;
         }
 
-        public void setOss(OssConfig oss) {
-            this.oss = oss;
+        public void setMongodb(MongoConfig mongodb) {
+            this.mongodb = mongodb;
+        }
+
+        public PostgresConfig getPostgres() {
+            return postgres;
+        }
+
+        public void setPostgres(PostgresConfig postgres) {
+            this.postgres = postgres;
         }
     }
 
-    public static class OssConfig {
-        private String endpoint;
-        private String accessKeyId;
-        private String accessKeySecret;
-        private String bucket;
-        private String keyPrefix = "veclite/";
-        private int retryTimes = 3;
-        private long retryBackoffMs = 500L;
-        private int connectTimeoutMs = 5000;
-        private int readTimeoutMs = 30000;
+    /** MongoDB 单一真相源持久化（StorageType.MONGODB）的连接与集合配置 */
+    public static class MongoConfig {
+        private String uri = "mongodb://localhost:27017";
+        private String database = "veclite";
+        private String documentCollection = "veclite_document";
+        private String metaCollection = "veclite_store_meta";
+        private String embeddingModelCollection = "veclite_embedding_model";
+        private int scanBatchSize = 1000;
 
-        public String getEndpoint() { return endpoint; }
-        public void setEndpoint(String endpoint) { this.endpoint = endpoint; }
+        public String getUri() {
+            return uri;
+        }
 
-        public String getAccessKeyId() { return accessKeyId; }
-        public void setAccessKeyId(String accessKeyId) { this.accessKeyId = accessKeyId; }
+        public void setUri(String uri) {
+            this.uri = uri;
+        }
 
-        public String getAccessKeySecret() { return accessKeySecret; }
-        public void setAccessKeySecret(String accessKeySecret) { this.accessKeySecret = accessKeySecret; }
+        public String getDatabase() {
+            return database;
+        }
 
-        public String getBucket() { return bucket; }
-        public void setBucket(String bucket) { this.bucket = bucket; }
+        public void setDatabase(String database) {
+            this.database = database;
+        }
 
-        public String getKeyPrefix() { return keyPrefix; }
-        public void setKeyPrefix(String keyPrefix) { this.keyPrefix = keyPrefix; }
+        public String getDocumentCollection() {
+            return documentCollection;
+        }
 
-        public int getRetryTimes() { return retryTimes; }
-        public void setRetryTimes(int retryTimes) { this.retryTimes = retryTimes; }
+        public void setDocumentCollection(String documentCollection) {
+            this.documentCollection = documentCollection;
+        }
 
-        public long getRetryBackoffMs() { return retryBackoffMs; }
-        public void setRetryBackoffMs(long retryBackoffMs) { this.retryBackoffMs = retryBackoffMs; }
+        public String getMetaCollection() {
+            return metaCollection;
+        }
 
-        public int getConnectTimeoutMs() { return connectTimeoutMs; }
-        public void setConnectTimeoutMs(int connectTimeoutMs) { this.connectTimeoutMs = connectTimeoutMs; }
+        public void setMetaCollection(String metaCollection) {
+            this.metaCollection = metaCollection;
+        }
 
-        public int getReadTimeoutMs() { return readTimeoutMs; }
-        public void setReadTimeoutMs(int readTimeoutMs) { this.readTimeoutMs = readTimeoutMs; }
+        public String getEmbeddingModelCollection() {
+            return embeddingModelCollection;
+        }
+
+        public void setEmbeddingModelCollection(String embeddingModelCollection) {
+            this.embeddingModelCollection = embeddingModelCollection;
+        }
+
+        public int getScanBatchSize() {
+            return scanBatchSize;
+        }
+
+        public void setScanBatchSize(int scanBatchSize) {
+            this.scanBatchSize = scanBatchSize;
+        }
     }
 
+    /** PostgreSQL 单一真相源持久化（StorageType.POSTGRES）的连接与表配置 */
+    public static class PostgresConfig {
+        private String jdbcUrl = "jdbc:postgresql://localhost:5432/veclite";
+        private String username = "postgres";
+        private String password = "";
+        private String documentTable = "veclite_document";
+        private String metaTable = "veclite_store_meta";
+        private String embeddingModelTable = "veclite_embedding_model";
+
+        /** 游标扫描批大小：对应 JDBC 的 fetchSize，控制启动装载时的内存占用 */
+        private int fetchSize = 1000;
+
+        public String getJdbcUrl() {
+            return jdbcUrl;
+        }
+
+        public void setJdbcUrl(String jdbcUrl) {
+            this.jdbcUrl = jdbcUrl;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public String getDocumentTable() {
+            return documentTable;
+        }
+
+        public void setDocumentTable(String documentTable) {
+            this.documentTable = documentTable;
+        }
+
+        public String getMetaTable() {
+            return metaTable;
+        }
+
+        public void setMetaTable(String metaTable) {
+            this.metaTable = metaTable;
+        }
+
+        public String getEmbeddingModelTable() {
+            return embeddingModelTable;
+        }
+
+        public void setEmbeddingModelTable(String embeddingModelTable) {
+            this.embeddingModelTable = embeddingModelTable;
+        }
+
+        public int getFetchSize() {
+            return fetchSize;
+        }
+
+        public void setFetchSize(int fetchSize) {
+            this.fetchSize = fetchSize;
+        }
+    }
+
+    /** 落盘前是否强制校验 vec / payload / idIndex 三者 size 一致（Fail-Fast 不变量断言） */
     private ConsistencyConfig consistency = new ConsistencyConfig();
-    private NodeConfig node = new NodeConfig();
-
-    public NodeConfig getNode() {
-        return node;
-    }
-
-    public void setNode(NodeConfig node) {
-        this.node = node;
-    }
-
-    public static class NodeConfig {
-        private String role = "master";
-        private String nodeId = "";
-
-        public String getRole() { return role; }
-        public void setRole(String role) { this.role = role; }
-        public String getNodeId() { return nodeId; }
-        public void setNodeId(String nodeId) { this.nodeId = nodeId; }
-
-        public boolean isMaster() { return "master".equalsIgnoreCase(role); }
-        public boolean isReplica() { return "replica".equalsIgnoreCase(role); }
-    }
 
     public ConsistencyConfig getConsistency() {
         return consistency;
@@ -336,27 +403,6 @@ public class VectorLiteProperties {
         }
     }
 
-    public static class EmbeddingConfig {
-        private String defaultModel;
-        private Map<String, ModelConfig> models = new HashMap<>();
-
-        public String getDefaultModel() {
-            return defaultModel;
-        }
-
-        public void setDefaultModel(String defaultModel) {
-            this.defaultModel = defaultModel;
-        }
-
-        public Map<String, ModelConfig> getModels() {
-            return models;
-        }
-
-        public void setModels(Map<String, ModelConfig> models) {
-            this.models = models;
-        }
-    }
-
     public static class ModelConfig {
         private String name;
         private String version = "1";
@@ -365,7 +411,7 @@ public class VectorLiteProperties {
         private String apiKey;
         private int dimension = 0;
         private int timeoutMillis = 1000;
-        private int batchSize = 8;
+        private int batchSize = 1;
 
         public String getName() {
             return name;

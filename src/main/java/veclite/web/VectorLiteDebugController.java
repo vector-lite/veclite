@@ -6,12 +6,14 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import veclite.api.VectorEngineClient;
 import veclite.api.VectorStoreDefinition;
 import veclite.api.VectorStoreManager;
+import veclite.embedding.EmbeddingModelRegistry;
+import veclite.embedding.EmbeddingService;
 import veclite.config.VectorLiteProperties;
 import veclite.model.*;
+import veclite.persistence.VectorPersistenceStorage;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -26,25 +28,63 @@ public class VectorLiteDebugController {
 
     private final VectorEngineClient client;
     private final VectorStoreManager storeManager;
-    private final VectorLiteProperties properties;
+    private final EmbeddingService embeddingService;
+    private final VectorPersistenceStorage persistence;
+    private final EmbeddingModelRegistry embeddingRegistry;
 
-    public VectorLiteDebugController(VectorEngineClient client,
-                                     VectorStoreManager storeManager,
-                                     VectorLiteProperties properties) {
+    public VectorLiteDebugController(VectorEngineClient client, VectorStoreManager storeManager,
+                                     EmbeddingService embeddingService, VectorPersistenceStorage persistence,
+                                     EmbeddingModelRegistry embeddingRegistry) {
         this.client = client;
         this.storeManager = storeManager;
-        this.properties = properties;
+        this.embeddingService = embeddingService;
+        this.persistence = persistence;
+        this.embeddingRegistry = embeddingRegistry;
     }
 
-    /**
-     * 集群模式：replica 节点收到写请求直接 403
-     */
-    private ResponseEntity<Map<String, String>> rejectIfReplica() {
-        if (properties.getNode() != null && properties.getNode().isReplica()) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("status", "REJECTED", "reason", "replica node rejects write"));
+    @Operation(summary = "Save (create or update) an embedding data source")
+    @PostMapping("/embedding/models")
+    public Map<String, String> saveEmbeddingModel(@RequestBody EmbeddingModelInfo model) {
+        embeddingRegistry.save(toModelConfig(model));
+        // 数据源补配后恢复启动时因缺模型被跳过的存量 Store
+        client.rediscoverPersistedStores();
+        return success();
+    }
+
+    @Operation(summary = "Set an embedding data source as the default model")
+    @PostMapping("/embedding/models/{name}/default")
+    public Map<String, String> setDefaultEmbeddingModel(
+            @Parameter(description = "Model name") @PathVariable String name,
+            @Parameter(description = "Model version; omitted resolves to the primary version of the name")
+            @RequestParam(required = false) String version) {
+        embeddingRegistry.saveDefault(name, version);
+        return success();
+    }
+
+    @Operation(summary = "Delete a managed embedding data source (yml built-in models cannot be deleted)")
+    @DeleteMapping("/embedding/models/{name}")
+    public Map<String, String> deleteEmbeddingModel(
+            @Parameter(description = "Model name") @PathVariable String name,
+            @Parameter(description = "Model version; omitted resolves to the primary version of the name")
+            @RequestParam(required = false) String version) {
+        embeddingRegistry.delete(name, version);
+        return success();
+    }
+
+    private VectorLiteProperties.ModelConfig toModelConfig(EmbeddingModelInfo model) {
+        if (model == null || model.getName() == null || model.getName().isBlank()) {
+            throw new IllegalArgumentException("Embedding model name is required");
         }
-        return null;
+        VectorLiteProperties.ModelConfig config = new VectorLiteProperties.ModelConfig();
+        config.setName(model.getName().trim());
+        config.setVersion(model.getVersion());
+        config.setProvider(model.getProvider());
+        config.setUrl(model.getUrl());
+        config.setApiKey(model.getApiKey());
+        config.setDimension(model.getDimension());
+        config.setTimeoutMillis(model.getTimeoutMillis());
+        config.setBatchSize(model.getBatchSize());
+        return config;
     }
 
     @Operation(summary = "List all vector stores")
@@ -53,7 +93,7 @@ public class VectorLiteDebugController {
         return storeManager.listStores();
     }
 
-    @Operation(summary = "List all vector stores with details (dimension, metric, docCount, storageSource, etc.)")
+    @Operation(summary = "List all vector stores with details (dimension, metric, docCount, etc.)")
     @GetMapping("/stores/_details")
     public List<VectorStoreStats> listStoresWithDetails() {
         List<String> names = storeManager.listStores();
@@ -64,7 +104,6 @@ public class VectorLiteDebugController {
             } catch (Exception e) {
                 VectorStoreStats fallback = new VectorStoreStats();
                 fallback.setStoreName(name);
-                fallback.setStorageSource("UNKNOWN");
                 result.add(fallback);
             }
         }
@@ -73,13 +112,11 @@ public class VectorLiteDebugController {
 
     @Operation(summary = "Create a new vector store")
     @PostMapping("/stores/{storeName}")
-    public ResponseEntity<Map<String, String>> createStore(
+    public Map<String, String> createStore(
             @Parameter(description = "Name of the store to create") @PathVariable String storeName,
             @RequestBody VectorStoreDefinition definition) {
-        ResponseEntity<Map<String, String>> r = rejectIfReplica();
-        if (r != null) return r;
         client.createStore(storeName, definition);
-        return ResponseEntity.ok(success());
+        return success();
     }
 
     @Operation(summary = "Get stats for a vector store")
@@ -91,23 +128,38 @@ public class VectorLiteDebugController {
 
     @Operation(summary = "Delete a vector store")
     @DeleteMapping("/stores/{storeName}")
-    public ResponseEntity<Map<String, String>> dropStore(
+    public Map<String, String> dropStore(
             @Parameter(description = "Store name") @PathVariable String storeName) {
-        ResponseEntity<Map<String, String>> r = rejectIfReplica();
-        if (r != null) return r;
+        // 同时删除持久化数据（快照目录 / 文档真相源），防止重启后已删除的 Store 复活
+        persistence.deleteStore(storeName);
         storeManager.dropStore(storeName);
-        return ResponseEntity.ok(success());
+        return success();
     }
 
     @Operation(summary = "Upsert a single document into a store")
     @PostMapping("/stores/{storeName}/documents")
-    public ResponseEntity<Map<String, String>> upsert(
+    public Map<String, String> upsert(
             @Parameter(description = "Store name") @PathVariable String storeName,
             @RequestBody VectorDocument document) {
-        ResponseEntity<Map<String, String>> r = rejectIfReplica();
-        if (r != null) return r;
         client.upsert(storeName, document);
-        return ResponseEntity.ok(success());
+        return success();
+    }
+
+    @Operation(summary = "Upsert a batch of documents into a store (text-only docs are auto-embedded)")
+    @PostMapping("/stores/{storeName}/documents/batch")
+    public Map<String, String> upsertBatch(
+            @Parameter(description = "Store name") @PathVariable String storeName,
+            @RequestBody List<VectorDocument> documents) {
+        client.upsertBatch(storeName, documents);
+        return success();
+    }
+
+    @Operation(summary = "Get a single document by ID (including its vector)")
+    @GetMapping("/stores/{storeName}/documents/{documentId}")
+    public VectorDocument getDocument(
+            @Parameter(description = "Store name") @PathVariable String storeName,
+            @Parameter(description = "Document ID") @PathVariable String documentId) {
+        return client.getDocument(storeName, documentId);
     }
 
     @Operation(summary = "List documents in a vector store")
@@ -141,12 +193,10 @@ public class VectorLiteDebugController {
 
     @Operation(summary = "Delete documents by ID list")
     @DeleteMapping("/stores/{storeName}/documents")
-    public ResponseEntity<DeleteResult> deleteByIds(
+    public DeleteResult deleteByIds(
             @Parameter(description = "Store name") @PathVariable String storeName,
             @RequestBody List<String> ids) {
-        ResponseEntity<Map<String, String>> r = rejectIfReplica();
-        if (r != null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
-        return ResponseEntity.ok(client.deleteByIds(storeName, ids));
+        return client.deleteByIds(storeName, ids);
     }
 
     @Operation(summary = "Reload store data from persistence")
@@ -159,15 +209,26 @@ public class VectorLiteDebugController {
 
     @Operation(summary = "Persist the latest in-memory data for a store")
     @PostMapping("/stores/{storeName}/refresh")
-    public ResponseEntity<Map<String, String>> refresh(
+    public Map<String, String> refresh(
             @Parameter(description = "Store name") @PathVariable String storeName) {
-        ResponseEntity<Map<String, String>> r = rejectIfReplica();
-        if (r != null) return r;
         client.refresh(storeName);
-        return ResponseEntity.ok(success());
+        return success();
+    }
+
+    @Operation(summary = "List configured embedding service endpoints")
+    @GetMapping("/embedding/models")
+    public List<EmbeddingModelInfo> listEmbeddingModels() {
+        return embeddingService.listModels();
     }
 
     private Map<String, String> success() {
         return Map.of("status", "SUCCESS");
+    }
+
+    /** 参数类异常统一映射为 400 并透出原因，便于前端 toast 展示 */
+    @ExceptionHandler(IllegalArgumentException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, String> handleIllegalArgument(IllegalArgumentException e) {
+        return Map.of("error", e.getMessage() == null ? "Invalid request" : e.getMessage());
     }
 }

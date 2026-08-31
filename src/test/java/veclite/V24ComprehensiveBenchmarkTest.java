@@ -143,7 +143,7 @@ public class V24ComprehensiveBenchmarkTest {
 
         LocalVectorEngine engine = new LocalVectorEngine(properties);
         SnapshotFileStorage storage = new SnapshotFileStorage(properties);
-        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, storage, properties);
+        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, storage, properties, null);
 
         VectorStoreDefinition definition = new VectorStoreDefinition();
         definition.setStoreName(storeName);

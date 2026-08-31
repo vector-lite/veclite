@@ -1,56 +1,39 @@
 server:
-  port: 8088
+  port: 8080
 
 veclite:
   enabled: true
   web:
     enabled: true
     base-path: /veclite/api/v1
-  # Embedding 接口管理：模型名称 + 版本是绑定 Store 的重要参数（绑定后不可变）
-  embedding:
-    default-model: text-embedding-v3
-    models:
-      text-embedding-v3:
-        name: text-embedding-v3
-        version: "v3"
-        provider: dashscope
-        url: https://llm-dij67chcqa06gb7k.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/embeddings
-        api-key: ${DASHSCOPE_API_KEY}
-        timeout-millis: 30000
-        batch-size: 8
+  # Embedding 数据源已改为数据库维护：通过数据源管理页或 /embedding/models 接口增删改查
   storage:
-    type: OSS
-    snapshot-file:
+    # 持久化后端全局开关：NOOP | SNAPSHOT_FILE | MONGODB | POSTGRES
+    type: POSTGRES
+    mongodb:                  # type=MONGODB 时生效
+      uri: mongodb://localhost:27017/veclite
+      database: veclite
+      document-collection: veclite_document
+      meta-collection: veclite_store_meta
+      scan-batch-size: 1000
+    postgres:                 # type=POSTGRES 时生效（建表见 src/main/resources/schema/veclite_postgres.sql）
+      jdbc-url: jdbc:postgresql://localhost:5432/veclite
+      username: ${POSTGRES_USER:veclite}
+      password: ${POSTGRES_PASSWORD:veclite}
+      document-table: veclite_document
+      meta-table: veclite_store_meta
+      embedding-model-table: veclite_embedding_model
+      fetch-size: 1000
+    snapshot-file:            # type=SNAPSHOT_FILE 时生效
       base-path: ./data/vector-lite
       flush-interval-seconds: 30
       flush-on-shutdown: true
-    oss:
-      endpoint: oss-cn-beijing.aliyuncs.com
-      bucket: java-lhy
-      key-prefix: veclite/
-      retry-times: 3
-      retry-backoff-ms: 500
-      connect-timeout-ms: 5000
-      read-timeout-ms: 30000
     payload:
       mode: MEMORY
-
-  # 内部一致性配置（v2.4 § 4.4）
-  # strict=true：assertConsistency 失败时直接抛 ConsistencyException，saveStore 落盘被阻止（生产推荐）
-  # strict=false：失败时打 ERROR 继续落盘（开发/调试用，可观察但可能写脏数据）
+  # 落盘前是否强制校验 vec / payload / idIndex 三者 size 一致；
+  # true 时校验失败直接抛 ConsistencyException 阻止落盘，false 时跳过校验（默认）
   consistency:
-    strict: true
-
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5432/veclite
-    username: ${POSTGRES_USER:veclite}
-    password: ${POSTGRES_PASSWORD:veclite}
-    driver-class-name: org.postgresql.Driver
-    hikari:
-      maximum-pool-size: 10
-      minimum-idle: 2
-      connection-timeout: 5000
+    strict: false
 
 springdoc:
   api-docs:

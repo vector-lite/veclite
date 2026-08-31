@@ -6,14 +6,22 @@ import veclite.api.EmbeddingProvider;
 import veclite.config.VectorLiteProperties;
 
 import java.io.OutputStream;
+import java.util.Objects;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 通过 HTTP 调用远程 Embedding 服务的适配器。
- * <p>服务端允许返回三种兼容格式，格式识别与解析由策略工厂负责，
- * 使网络请求流程与响应解析职责保持隔离。</p>
+ * <p>
+ * 本类只承担传输职责（连接、超时、状态码），请求体构造与响应解析由
+ * {@link EmbeddingHttpAdapter} 协议适配层完成，协议选择由模型配置的
+ * {@code provider} 字段驱动（http/openai、ollama、ollama-embed）。
+ * 对"服务端静默失败"的响应（如 Ollama 老接口返回空向量）显式校验并抛出，
+ * 避免零维向量流入 Store 造成静默数据损坏。
  */
 public class HttpEmbeddingProvider implements EmbeddingProvider {
 
@@ -21,16 +29,12 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
     private static final String JSON_CONTENT_TYPE = "application/json";
     private static final int HTTP_OK = 200;
 
-    private final VectorLiteProperties properties;
+    /** 模型配置注册中心（数据库维护），模型配置只从这里解析 */
+    private final EmbeddingModelRegistry registry;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /**
-     * 创建 HTTP Embedding 提供者。
-     *
-     * @param properties 向量库配置，必须包含 Embedding 模型配置
-     */
-    public HttpEmbeddingProvider(VectorLiteProperties properties) {
-        this.properties = properties;
+    public HttpEmbeddingProvider(EmbeddingModelRegistry registry) {
+        this.registry = Objects.requireNonNull(registry, "registry must not be null");
     }
 
     /** {@inheritDoc} */
@@ -46,150 +50,112 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
     /** {@inheritDoc} */
     @Override
     public List<List<Float>> embedBatch(String modelName, String modelVersion, List<String> texts, int dimension) {
-        VectorLiteProperties.ModelConfig modelConfig = resolveModelConfig(modelName);
+        VectorLiteProperties.ModelConfig modelConfig = resolveModelConfig(modelName, modelVersion);
         String urlString = modelConfig.getUrl();
         if (urlString == null || urlString.isEmpty()) {
             throw new IllegalArgumentException("No URL configured for embedding model: " + modelName);
         }
 
+        EmbeddingHttpAdapter adapter = EmbeddingHttpAdapter.forProvider(modelConfig.getProvider());
+        String effectiveVersion = modelVersion != null ? modelVersion : modelConfig.getVersion();
+        // 维度优先级：调用方传入 > 数据源自带配置；两者都未指定时由服务端决定
+        int effectiveDimension = dimension > 0 ? dimension : modelConfig.getDimension();
+        List<byte[]> requestBodies = adapter.buildRequests(modelName, effectiveVersion, texts, effectiveDimension);
+
         try {
             URL url = new URL(urlString);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod(HTTP_METHOD);
-            conn.setRequestProperty("Content-Type", JSON_CONTENT_TYPE);
-            if (modelConfig.getApiKey() != null && !modelConfig.getApiKey().isEmpty()) {
-                conn.setRequestProperty("Authorization", "Bearer " + modelConfig.getApiKey());
-            }
-            conn.setConnectTimeout(modelConfig.getTimeoutMillis());
-            conn.setReadTimeout(modelConfig.getTimeoutMillis());
-            conn.setDoOutput(true);
+            List<List<Float>> embeddings = new ArrayList<>(texts.size());
+            for (byte[] requestBody : requestBodies) {
+                HttpURLConnection conn = openConnection(url, modelConfig.getTimeoutMillis(), modelConfig.getApiKey());
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(requestBody);
+                    os.flush();
+                }
 
-            Map<String, Object> reqBody = new HashMap<>();
-            reqBody.put("model", modelName);
-            reqBody.put("version", modelVersion != null ? modelVersion : modelConfig.getVersion());
-            reqBody.put("input", texts);
-            // 维度优先级：调用方传入 > yml ModelConfig 配置
-            int effectiveDim = dimension > 0 ? dimension : modelConfig.getDimension();
-            if (effectiveDim > 0) {
-                reqBody.put("dimension", effectiveDim);
-            }
+                int responseCode = conn.getResponseCode();
+                if (responseCode != HTTP_OK) {
+                    throw new RuntimeException("HTTP embedding request failed with status code: " + responseCode);
+                }
 
-            byte[] jsonBytes = objectMapper.writeValueAsBytes(reqBody);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(jsonBytes);
-                os.flush();
+                JsonNode root = objectMapper.readTree(conn.getInputStream());
+                appendParsed(adapter.parseResponse(root), embeddings);
             }
-
-            int responseCode = conn.getResponseCode();
-            if (responseCode != HTTP_OK) {
-                throw new RuntimeException("HTTP embedding request failed with status code: " + responseCode);
-            }
-
-            JsonNode root = objectMapper.readTree(conn.getInputStream());
-            List<List<Float>> embeddings = EmbeddingResponseParserFactory
-                    .forResponse(root)
-                    .parse(root);
-
-            if (embeddings.isEmpty()) {
-                throw new IllegalStateException("Failed to parse vector embedding from HTTP response");
-            }
+            validateBatchResult(modelName, texts, embeddings);
             return embeddings;
         } catch (Exception e) {
+            if (e instanceof IllegalStateException || e instanceof IllegalArgumentException) {
+                throw (RuntimeException) e;
+            }
             throw new RuntimeException("HTTP Embedding request failed for model [" + modelName + "]: " + e.getMessage(), e);
         }
     }
 
     /**
-     * 解析请求模型配置；请求模型不存在时沿用既有默认模型回退规则。
+     * 打开 HTTP 连接：统一设置方法、Content-Type、双向超时与可选的 Bearer 鉴权。
+     *
+     * @param apiKey 数据源配置的 API Key；为 null 或空时不发送 Authorization 头
+     */
+    private HttpURLConnection openConnection(URL url, int timeoutMillis, String apiKey) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod(HTTP_METHOD);
+        conn.setRequestProperty("Content-Type", JSON_CONTENT_TYPE);
+        if (apiKey != null && !apiKey.isEmpty()) {
+            conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+        }
+        conn.setConnectTimeout(timeoutMillis);
+        conn.setReadTimeout(timeoutMillis);
+        conn.setDoOutput(true);
+        return conn;
+    }
+
+    /** 空向量与解析失败防护：防止零维向量静默流入 Store */
+    private void appendParsed(List<List<Float>> parsed, List<List<Float>> sink) {
+        if (parsed == null || parsed.isEmpty()) {
+            throw new IllegalStateException(
+                    "Failed to parse vector embedding from HTTP response. "
+                            + "Check that the model URL matches the configured provider protocol.");
+        }
+        for (List<Float> vector : parsed) {
+            if (vector.isEmpty()) {
+                throw new IllegalStateException(
+                        "Embedding service returned an empty vector. "
+                                + "This usually means the request body format does not match the provider protocol "
+                                + "(e.g. Ollama /api/embeddings requires 'prompt', not 'input').");
+            }
+            sink.add(vector);
+        }
+    }
+
+    /** 批量结果必须与输入文本一一对应，保证上层 autoEmbed 的对位赋值安全 */
+    private void validateBatchResult(String modelName, List<String> texts, List<List<Float>> embeddings) {
+        if (embeddings.size() != texts.size()) {
+            throw new IllegalStateException(
+                    "Embedding response count mismatch for model [" + modelName + "]. "
+                            + "Expected: " + texts.size() + ", actual: " + embeddings.size());
+        }
+    }
+
+    /**
+     * 解析模型配置：按（名称， 版本）查找；版本为空时回退该名称的主版本配置。
+     * 请求模型未命中时沿用默认模型回退规则。
      *
      * @param modelName 请求使用的模型名
      * @return 可用于发起 HTTP 请求的模型配置
      * @throws IllegalArgumentException 未找到请求模型及默认模型配置时抛出
      */
-    private VectorLiteProperties.ModelConfig resolveModelConfig(String modelName) {
-        Map<String, VectorLiteProperties.ModelConfig> models = properties.getEmbedding().getModels();
-        if (models != null && models.containsKey(modelName)) {
-            return models.get(modelName);
+    private VectorLiteProperties.ModelConfig resolveModelConfig(String modelName, String modelVersion) {
+        VectorLiteProperties.ModelConfig config = registry.find(modelName, modelVersion);
+        if (config == null) {
+            EmbeddingModelRef defaultRef = registry.defaultRef();
+            if (defaultRef != null && !defaultRef.name().equals(modelName)) {
+                config = registry.find(defaultRef.name(), defaultRef.version());
+            }
         }
-        // 请求的模型未命中时，回退到默认模型名对应的配置（defaultModel 是名称，不是 URL）
-        String defaultModelName = properties.getEmbedding().getDefaultModel();
-        if (defaultModelName != null && !defaultModelName.equals(modelName)
-                && models != null && models.containsKey(defaultModelName)) {
-            return models.get(defaultModelName);
+        if (config != null) {
+            return config;
         }
         throw new IllegalArgumentException(
                 "No configuration found for embedding model [" + modelName + "]. "
-                        + "Please configure it under veclite.embedding.models with a valid URL.");
-    }
-
-    /** 远程服务响应的顶层形态。 */
-    private enum ResponseShape { DATA, SINGLE, ARRAY, UNKNOWN }
-
-    /** 响应解析策略，单一职责地将一种 JSON 形态转换为向量列表。 */
-    private interface EmbeddingResponseParser {
-        List<List<Float>> parse(JsonNode root);
-    }
-
-    /** 根据响应形态创建解析策略的工厂。 */
-    private static final class EmbeddingResponseParserFactory {
-        private EmbeddingResponseParserFactory() {
-        }
-
-        static EmbeddingResponseParser forResponse(JsonNode root) {
-            ResponseShape shape = classify(root);
-            return switch (shape) {
-                case DATA -> HttpEmbeddingProvider::parseDataResponse;
-                case SINGLE -> HttpEmbeddingProvider::parseSingleResponse;
-                case ARRAY -> HttpEmbeddingProvider::parseArrayResponse;
-                case UNKNOWN -> ignored -> List.of();
-            };
-        }
-
-        private static ResponseShape classify(JsonNode root) {
-            if (root != null && root.has("data") && root.get("data").isArray()) {
-                return ResponseShape.DATA;
-            }
-            if (root != null && root.has("embedding") && root.get("embedding").isArray()) {
-                return ResponseShape.SINGLE;
-            }
-            return root != null && root.isArray() ? ResponseShape.ARRAY : ResponseShape.UNKNOWN;
-        }
-    }
-
-    /** 解析 OpenAI 兼容的 {@code data} 数组响应。 */
-    private static List<List<Float>> parseDataResponse(JsonNode root) {
-        List<List<Float>> embeddings = new ArrayList<>();
-        for (JsonNode item : root.get("data")) {
-            JsonNode vector = item.has("embedding") && item.get("embedding").isArray()
-                    ? item.get("embedding") : item.isArray() ? item : null;
-            if (vector != null) {
-                embeddings.add(parseVectorNodeStatic(vector));
-            }
-        }
-        return embeddings;
-    }
-
-    /** 解析单个 {@code embedding} 字段响应。 */
-    private static List<List<Float>> parseSingleResponse(JsonNode root) {
-        return List.of(parseVectorNodeStatic(root.get("embedding")));
-    }
-
-    /** 解析顶层为二维数组的响应。 */
-    private static List<List<Float>> parseArrayResponse(JsonNode root) {
-        List<List<Float>> embeddings = new ArrayList<>();
-        for (JsonNode item : root) {
-            if (item.isArray()) {
-                embeddings.add(parseVectorNodeStatic(item));
-            }
-        }
-        return embeddings;
-    }
-
-    private static List<Float> parseVectorNodeStatic(JsonNode arrayNode) {
-        List<Float> vector = new ArrayList<>(arrayNode.size());
-        for (JsonNode value : arrayNode) {
-            vector.add((float) value.asDouble());
-        }
-        return vector;
+                        + "Please add it via the data source management API or page first.");
     }
 }

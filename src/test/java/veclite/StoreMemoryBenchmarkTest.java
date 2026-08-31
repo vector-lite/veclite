@@ -52,7 +52,7 @@ public class StoreMemoryBenchmarkTest {
 
         LocalVectorEngine engine = new LocalVectorEngine();
         VectorPersistenceStorage storage = new SnapshotFileStorage(properties);
-        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, storage, properties);
+        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, storage, properties, null);
 
         runGC();
         long initialMemory = getUsedMemoryMB();

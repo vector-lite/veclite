@@ -5,42 +5,30 @@ import veclite.api.VectorStoreManager;
 import veclite.config.VectorLiteProperties;
 import veclite.embedding.EmbeddingService;
 import veclite.model.VectorStoreStats;
-import veclite.persistence.meta.VectorMetadataRepository;
-import veclite.persistence.meta.VectorStoreMetadata;
 
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class LocalVectorEngine implements VectorStoreManager {
 
     private final VectorLiteProperties properties;
     private final EmbeddingService embeddingService;
-    private final VectorMetadataRepository metadataRepository;
     private final Map<String, LocalVectorStore> stores = new ConcurrentHashMap<>();
 
     public LocalVectorEngine() {
-        this(null, null, null);
+        this(null, null);
     }
 
     public LocalVectorEngine(VectorLiteProperties properties) {
-        this(properties, null, null);
+        this(properties, null);
     }
 
     public LocalVectorEngine(VectorLiteProperties properties, EmbeddingService embeddingService) {
-        this(properties, embeddingService, null);
-    }
-
-    public LocalVectorEngine(VectorLiteProperties properties,
-                             EmbeddingService embeddingService,
-                             VectorMetadataRepository metadataRepository) {
         this.properties = properties;
         this.embeddingService = embeddingService;
-        this.metadataRepository = metadataRepository;
     }
 
     /**
@@ -80,12 +68,7 @@ public class LocalVectorEngine implements VectorStoreManager {
                 definition.setEmbeddingModelVersion(
                         embeddingService.resolveVersion(definition.getEmbeddingModel(), definition.getEmbeddingModelVersion()));
             }
-            LocalVectorStore store = new LocalVectorStore(definition, properties);
-            // v2.4 hybrid persistence: 元数据写 PG（如已配置）
-            if (metadataRepository != null) {
-                metadataRepository.save(toMetadata(store));
-            }
-            return store;
+            return new LocalVectorStore(definition, properties);
         });
     }
 
@@ -108,9 +91,6 @@ public class LocalVectorEngine implements VectorStoreManager {
     public void dropStore(String storeName) {
         if (storeName != null) {
             stores.remove(storeName);
-            if (metadataRepository != null) {
-                metadataRepository.deleteByName(storeName);
-            }
         }
     }
 
@@ -131,27 +111,6 @@ public class LocalVectorEngine implements VectorStoreManager {
             throw new IllegalArgumentException("Vector store not found: " + storeName);
         }
         return store;
-    }
-
-    public Optional<VectorMetadataRepository> getMetadataRepository() {
-        return Optional.ofNullable(metadataRepository);
-    }
-
-    private VectorStoreMetadata toMetadata(LocalVectorStore store) {
-        VectorStoreDefinition d = store.getDefinition();
-        VectorStoreMetadata m = new VectorStoreMetadata();
-        m.setStoreName(d.getStoreName());
-        m.setDimension(d.getDimension());
-        m.setMetric(d.getMetric());
-        m.setMaxCapacity(d.getMaxCapacity());
-        m.setEmbeddingModel(d.getEmbeddingModel());
-        m.setEmbeddingModelVersion(d.getEmbeddingModelVersion());
-        m.setQuantization(d.getQuantization());
-        m.setIndexedMetadataFields(d.getIndexedMetadataFields());
-        m.setActiveCount(0);
-        m.setCreatedAt(Instant.now());
-        m.setUpdatedAt(Instant.now());
-        return m;
     }
 
     /**

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
 import veclite.engine.LocalVectorStore;
+import veclite.engine.LocalVectorStoreAssertions;
 import veclite.model.VectorDocument;
 
 import java.io.*;
@@ -46,6 +47,11 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
     public synchronized void saveStore(LocalVectorStore store) {
         if (store == null) {
             return;
+        }
+        // 快照前校验 vec / payload / idIndex 三者 size 一致（架构规范要求的落盘不变量）。
+        // 仅在 veclite.consistency.strict=true 时启用，默认关闭以保留既有落盘行为。
+        if (properties != null && properties.getConsistency() != null && properties.getConsistency().isStrict()) {
+            LocalVectorStoreAssertions.assertConsistency(store);
         }
         String storeName = store.getDefinition().getStoreName();
         File storeDir = getStoreDir(storeName);

@@ -5,6 +5,9 @@ import org.junit.jupiter.api.Test;
 import veclite.api.EmbeddingProvider;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
+import veclite.embedding.EmbeddingModelRef;
+import veclite.embedding.EmbeddingModelRegistry;
+import veclite.embedding.EmbeddingModelStore;
 import veclite.embedding.EmbeddingService;
 import veclite.engine.LocalVectorEngine;
 import veclite.engine.VectorEngineClientImpl;
@@ -44,21 +47,20 @@ public class EmbeddingFlowTest {
     @BeforeEach
     public void setUp() {
         properties = new VectorLiteProperties();
+        // 模型配置改为数据库维护：测试用内存版持久化端口承载
         VectorLiteProperties.ModelConfig model = new VectorLiteProperties.ModelConfig();
         model.setName(MODEL);
         model.setVersion(VERSION);
         model.setUrl("http://localhost/mock-embed");
         model.setTimeoutMillis(1000);
         model.setBatchSize(4);
-        Map<String, VectorLiteProperties.ModelConfig> models = new HashMap<>();
-        models.put(MODEL, model);
-        properties.getEmbedding().setModels(models);
-        properties.getEmbedding().setDefaultModel(MODEL);
+        EmbeddingModelRegistry registry = new EmbeddingModelRegistry(new InMemoryModelStore());
+        registry.save(model);
 
         provider = new RecordingEmbeddingProvider();
-        embeddingService = new EmbeddingService(provider, properties);
+        embeddingService = new EmbeddingService(provider, registry);
         engine = new LocalVectorEngine(properties, embeddingService);
-        client = new VectorEngineClientImpl(engine, provider, new NoopVectorPersistenceStorage(), properties);
+        client = new VectorEngineClientImpl(engine, provider, new NoopVectorPersistenceStorage(), properties, registry);
     }
 
     private VectorStoreDefinition definition(String model, String version) {
@@ -253,5 +255,37 @@ public class EmbeddingFlowTest {
             }
             return vector;
         }
+    }
+
+    /** 内存版模型配置持久化端口，模拟数据库集合 */
+    private static final class InMemoryModelStore implements EmbeddingModelStore {
+        private final Map<String, VectorLiteProperties.ModelConfig> rows = new HashMap<>();
+
+        @Override
+        public List<VectorLiteProperties.ModelConfig> loadAll() {
+            return new ArrayList<>(rows.values());
+        }
+
+        @Override
+        public void save(VectorLiteProperties.ModelConfig config) {
+            rows.put(config.getName() + "\u001F" + config.getVersion(), config);
+        }
+
+        @Override
+        public boolean delete(String name, String version) {
+            return rows.remove(name + "\u001F" + version) != null;
+        }
+
+        @Override
+        public void saveDefault(EmbeddingModelRef ref) {
+            this.defaultRef = ref;
+        }
+
+        @Override
+        public EmbeddingModelRef loadDefault() {
+            return defaultRef;
+        }
+
+        private EmbeddingModelRef defaultRef;
     }
 }

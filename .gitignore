@@ -7,6 +7,10 @@ gradle/wrapper/*.class
 !**/src/test/**/build/
 logs
 
+# Runtime generated data (do not commit local mmap snapshots)
+data/
+**/data/
+
 ### STS ###
 .apt_generated
 .classpath
@@ -37,3 +41,6 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### WorkBuddy 本地工作数据（工作日志、记忆等） ###
+.workbuddy/

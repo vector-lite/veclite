@@ -11,14 +11,10 @@ package veclite.engine;
  * </ul>
  *
  * <p>三者必须相等，否则说明在并发 Upsert / 异常回滚 / 逻辑 bug 路径上
- * 已经产生了错位状态。此时落盘只会把脏数据固化到本地 mmap 与 OSS，
+ * 已经产生了错位状态。此时落盘只会把脏数据固化下来，
  * 启动加载后仍然是脏的——必须 Fail-Fast 阻止落盘。
  *
- * <p>调用时机：
- * <ul>
- *   <li>{@code OssSnapshotStorage.saveStore} / {@code SnapshotFileStorage.saveStore} 落盘前</li>
- *   <li>{@code OssStartupLoader} 启动加载到内存后</li>
- * </ul>
+ * <p>调用时机：快照类持久化实现的 {@code saveStore} 落盘前、启动装载到内存后。
  */
 public final class LocalVectorStoreAssertions {
 

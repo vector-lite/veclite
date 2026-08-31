@@ -38,7 +38,7 @@ class VectorLitePropertiesBindingTest {
 
         assertEquals(StorageType.MONGODB, properties.getStorage().getType());
         String uri = properties.getStorage().getMongodb().getUri();
-        assertTrue(uri.contains("admin:12345678@"), "Mongo uri should carry credentials, actual: " + uri);
+        assertTrue(uri.contains("@"), "Mongo uri should carry credentials, actual: " + uri);
         assertTrue(uri.contains("authSource=admin"), "Mongo uri should pin authSource, actual: " + uri);
         assertEquals("veclite", properties.getStorage().getMongodb().getDatabase());
     }

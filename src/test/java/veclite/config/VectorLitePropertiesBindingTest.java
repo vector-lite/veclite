@@ -37,10 +37,10 @@ class VectorLitePropertiesBindingTest {
                 .get();
 
         assertEquals(StorageType.MONGODB, properties.getStorage().getType());
-        // uri 由本地环境决定（可能带凭证），只做结构断言：必须是 mongodb:// 且带库名
+        // uri 由本地环境决定（凭证、库路径可能以任意组合出现），只做协议前缀断言；
+        // 库名由独立的 database 配置承载，见下方断言
         String uri = properties.getStorage().getMongodb().getUri();
-        assertTrue(uri.startsWith("mongodb://"), "Mongo uri 应形如 mongodb://host/db, actual: " + uri);
-        assertTrue(uri.contains("/veclite"), "Mongo uri 应包含数据库名, actual: " + uri);
+        assertTrue(uri.startsWith("mongodb://"), "Mongo uri 应形如 mongodb://..., actual: " + uri);
         assertEquals("veclite", properties.getStorage().getMongodb().getDatabase());
         assertEquals("veclite_document", properties.getStorage().getMongodb().getDocumentCollection());
 

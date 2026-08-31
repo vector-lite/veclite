@@ -8,8 +8,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import veclite.engine.LocalVectorEngine;
 import veclite.engine.LocalVectorStore;
+import veclite.persistence.meta.VectorMetadataRepository;
+import veclite.persistence.meta.VectorStoreMetadata;
 
 import javax.annotation.PreDestroy;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -36,14 +39,18 @@ public class FlushScheduler {
     private final LocalVectorEngine engine;
     private final VectorPersistenceStorage persistence;
     private final boolean flushOnShutdown;
+    private final VectorMetadataRepository metadataRepository;
 
     @Autowired
     public FlushScheduler(LocalVectorEngine engine, VectorPersistenceStorage persistence,
                           @Value("${veclite.storage.snapshot-file.flush-on-shutdown:true}")
-                          boolean flushOnShutdown) {
+                          boolean flushOnShutdown,
+                          @org.springframework.beans.factory.annotation.Autowired(required = false)
+                          VectorMetadataRepository metadataRepository) {
         this.engine = engine;
         this.persistence = persistence;
         this.flushOnShutdown = flushOnShutdown;
+        this.metadataRepository = metadataRepository;
     }
 
     /**
@@ -53,6 +60,7 @@ public class FlushScheduler {
         this.engine = null;
         this.persistence = null;
         this.flushOnShutdown = false;
+        this.metadataRepository = null;
     }
 
     @Scheduled(
@@ -75,6 +83,13 @@ public class FlushScheduler {
             try {
                 LocalVectorStore store = engine.getStore(storeName);
                 persistence.saveStore(store);
+                // v2.4 hybrid persistence: OSS 落盘成功后，写 PG 指针让 replica 感知新版本
+                if (metadataRepository != null) {
+                    String snapshotVersion = "v_" + Instant.now().toEpochMilli();
+                    String ossPath = buildOssPath(storeName, snapshotVersion);
+                    int activeCount = store.getActiveCount();
+                    metadataRepository.updateSnapshotPointer(storeName, snapshotVersion, ossPath, activeCount);
+                }
                 success++;
             } catch (Exception e) {
                 failed++;
@@ -85,6 +100,15 @@ public class FlushScheduler {
         if (success > 0 || failed > 0) {
             log.info("Scheduled flush done in {}ms: success={}, failed={}", cost, success, failed);
         }
+    }
+
+    /**
+     * 构造 OSS 路径：oss://{bucket}/{keyPrefix}/{storeName}/{snapshotVersion}/
+     */
+    private String buildOssPath(String storeName, String snapshotVersion) {
+        VectorStoreMetadata meta = metadataRepository.findByName(storeName).orElse(null);
+        String prefix = meta == null ? "" : "";
+        return "veclite/" + storeName + "/" + snapshotVersion + "/";
     }
 
     /**

@@ -7,6 +7,8 @@ import veclite.config.VectorLiteProperties;
 import veclite.embedding.EmbeddingService;
 import veclite.model.*;
 import veclite.persistence.VectorPersistenceStorage;
+import veclite.persistence.meta.VectorMetadataRepository;
+import veclite.persistence.meta.VectorStoreMetadata;
 
 import java.util.List;
 
@@ -19,31 +21,73 @@ public class VectorEngineClientImpl implements VectorEngineClient {
 
     /** 本地向量引擎（管理 Store 实例映射） */
     private final LocalVectorEngine localVectorEngine;
-    
+
     /** 文本 Embedding 服务 */
     private final EmbeddingService embeddingService;
-    
+
     /** 持久化存储接口 */
     private final VectorPersistenceStorage persistence;
-    
+
     /** 全局配置属性 */
     private final VectorLiteProperties properties;
+
+    /** PG 元数据仓储（可选，集群模式下存在） */
+    private final VectorMetadataRepository metadataRepository;
 
     public VectorEngineClientImpl(LocalVectorEngine localVectorEngine,
                                   EmbeddingProvider embeddingProvider,
                                   VectorPersistenceStorage persistence,
                                   VectorLiteProperties properties) {
+        this(localVectorEngine, embeddingProvider, persistence, properties, null);
+    }
+
+    public VectorEngineClientImpl(LocalVectorEngine localVectorEngine,
+                                  EmbeddingProvider embeddingProvider,
+                                  VectorPersistenceStorage persistence,
+                                  VectorLiteProperties properties,
+                                  VectorMetadataRepository metadataRepository) {
         this.localVectorEngine = localVectorEngine;
         this.embeddingService = embeddingProvider != null ? new EmbeddingService(embeddingProvider, properties) : null;
         this.persistence = persistence;
         this.properties = properties;
+        this.metadataRepository = metadataRepository;
 
-        // 应用启动时，自动初始化配置中的 Store 并加载磁盘快照
-        initStoresFromProperties();
+        // 集群模式：先从 PG listAll 发现；单 pod 回退 yml
+        if (metadataRepository != null) {
+            initStoresFromPg();
+        } else {
+            initStoresFromProperties();
+        }
     }
 
     /**
-     * 根据 application.yml 中的配置初始化 VectorStore，并自动加载本地持久化快照。
+     * 集群模式：启动时从 PG listAll 发现所有 store 并加载。
+     */
+    private void initStoresFromPg() {
+        java.util.List<VectorStoreMetadata> all = metadataRepository.listAll();
+        for (VectorStoreMetadata m : all) {
+            try {
+                VectorStoreDefinition definition = new VectorStoreDefinition();
+                definition.setStoreName(m.getStoreName());
+                definition.setDimension(m.getDimension());
+                definition.setMetric(m.getMetric());
+                definition.setMaxCapacity(m.getMaxCapacity());
+                definition.setEmbeddingModel(m.getEmbeddingModel());
+                definition.setEmbeddingModelVersion(m.getEmbeddingModelVersion());
+                definition.setQuantization(m.getQuantization());
+                definition.setIndexedMetadataFields(m.getIndexedMetadataFields());
+                localVectorEngine.createStore(m.getStoreName(), definition);
+                LocalVectorStore store = localVectorEngine.getStore(m.getStoreName());
+                persistence.loadStore(store);
+            } catch (Exception e) {
+                org.slf4j.LoggerFactory.getLogger(VectorEngineClientImpl.class)
+                        .error("Failed to init store [{}] from PG: {}", m.getStoreName(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 单 pod 模式：根据 application.yml 中的配置初始化 VectorStore，并自动加载磁盘快照。
      */
     private void initStoresFromProperties() {
         if (properties.getStores() != null) {
@@ -56,10 +100,10 @@ public class VectorEngineClientImpl implements VectorEngineClient {
                 definition.setEmbeddingModel(config.getEmbeddingModel());
                 definition.setQuantization(config.getQuantization());
                 definition.setIndexedMetadataFields(config.getIndexedMetadataFields());
-                
+
                 // 1. 创建内存中的 Store
                 localVectorEngine.createStore(storeName, definition);
-                
+
                 // 2. 自动从持久化目录恢复数据快照（若存在）
                 LocalVectorStore store = localVectorEngine.getStore(storeName);
                 persistence.loadStore(store);

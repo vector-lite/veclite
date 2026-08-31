@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: 8088
 
 veclite:
   enabled: true
@@ -40,6 +40,17 @@ veclite:
   # strict=false：失败时打 ERROR 继续落盘（开发/调试用，可观察但可能写脏数据）
   consistency:
     strict: true
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/veclite
+    username: ${POSTGRES_USER:veclite}
+    password: ${POSTGRES_PASSWORD:veclite}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
 
 springdoc:
   api-docs:

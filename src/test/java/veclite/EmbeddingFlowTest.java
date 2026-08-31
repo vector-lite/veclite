@@ -208,31 +208,36 @@ public class EmbeddingFlowTest {
             final String model;
             final String version;
             final int batchSize;
+            final int dimension;
 
-            Call(String model, String version, int batchSize) {
+            Call(String model, String version, int batchSize, int dimension) {
                 this.model = model;
                 this.version = version;
                 this.batchSize = batchSize;
+                this.dimension = dimension;
             }
         }
 
         final List<Call> calls = new ArrayList<>();
         volatile String lastModel;
         volatile String lastVersion;
+        volatile int lastDimension;
 
         @Override
-        public List<Float> embed(String modelName, String modelVersion, String text) {
+        public List<Float> embed(String modelName, String modelVersion, String text, int dimension) {
             lastModel = modelName;
             lastVersion = modelVersion;
-            calls.add(new Call(modelName, modelVersion, 1));
+            lastDimension = dimension;
+            calls.add(new Call(modelName, modelVersion, 1, dimension));
             return embedText(text);
         }
 
         @Override
-        public List<List<Float>> embedBatch(String modelName, String modelVersion, List<String> texts) {
+        public List<List<Float>> embedBatch(String modelName, String modelVersion, List<String> texts, int dimension) {
             lastModel = modelName;
             lastVersion = modelVersion;
-            calls.add(new Call(modelName, modelVersion, texts.size()));
+            lastDimension = dimension;
+            calls.add(new Call(modelName, modelVersion, texts.size(), dimension));
             List<List<Float>> result = new ArrayList<>(texts.size());
             for (String text : texts) {
                 result.add(embedText(text));

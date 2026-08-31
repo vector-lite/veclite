@@ -15,6 +15,7 @@ import veclite.persistence.NoopVectorPersistenceStorage;
 import veclite.persistence.OssSnapshotStorage;
 import veclite.persistence.SnapshotFileStorage;
 import veclite.persistence.VectorPersistenceStorage;
+import veclite.persistence.meta.VectorMetadataRepository;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -108,11 +109,14 @@ public class VectorLiteAutoConfiguration {
 
     /**
      * 内存向量引擎核心实例
+     * v2.4 hybrid persistence: 注入元数据仓储（PostgreSQL），createStore 时同步写 PG
      */
     @Bean
     @ConditionalOnMissingBean
-    public LocalVectorEngine localVectorEngine(VectorLiteProperties properties, EmbeddingService embeddingService) {
-        return new LocalVectorEngine(properties, embeddingService);
+    public LocalVectorEngine localVectorEngine(VectorLiteProperties properties,
+                                               EmbeddingService embeddingService,
+                                               @org.springframework.beans.factory.annotation.Autowired(required = false) VectorMetadataRepository metadataRepository) {
+        return new LocalVectorEngine(properties, embeddingService, metadataRepository);
     }
 
     /**
@@ -132,7 +136,8 @@ public class VectorLiteAutoConfiguration {
     public VectorEngineClient vectorEngineClient(LocalVectorEngine localVectorEngine,
                                                  EmbeddingProvider embeddingProvider,
                                                  VectorPersistenceStorage vectorPersistenceStorage,
-                                                 VectorLiteProperties properties) {
-        return new VectorEngineClientImpl(localVectorEngine, embeddingProvider, vectorPersistenceStorage, properties);
+                                                 VectorLiteProperties properties,
+                                                 @org.springframework.beans.factory.annotation.Autowired(required = false) VectorMetadataRepository metadataRepository) {
+        return new VectorEngineClientImpl(localVectorEngine, embeddingProvider, vectorPersistenceStorage, properties, metadataRepository);
     }
 }

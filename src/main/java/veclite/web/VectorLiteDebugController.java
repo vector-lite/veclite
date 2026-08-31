@@ -6,9 +6,12 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import veclite.api.VectorEngineClient;
 import veclite.api.VectorStoreDefinition;
 import veclite.api.VectorStoreManager;
+import veclite.config.VectorLiteProperties;
 import veclite.model.*;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -23,10 +26,25 @@ public class VectorLiteDebugController {
 
     private final VectorEngineClient client;
     private final VectorStoreManager storeManager;
+    private final VectorLiteProperties properties;
 
-    public VectorLiteDebugController(VectorEngineClient client, VectorStoreManager storeManager) {
+    public VectorLiteDebugController(VectorEngineClient client,
+                                     VectorStoreManager storeManager,
+                                     VectorLiteProperties properties) {
         this.client = client;
         this.storeManager = storeManager;
+        this.properties = properties;
+    }
+
+    /**
+     * 集群模式：replica 节点收到写请求直接 403
+     */
+    private ResponseEntity<Map<String, String>> rejectIfReplica() {
+        if (properties.getNode() != null && properties.getNode().isReplica()) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("status", "REJECTED", "reason", "replica node rejects write"));
+        }
+        return null;
     }
 
     @Operation(summary = "List all vector stores")
@@ -55,11 +73,13 @@ public class VectorLiteDebugController {
 
     @Operation(summary = "Create a new vector store")
     @PostMapping("/stores/{storeName}")
-    public Map<String, String> createStore(
+    public ResponseEntity<Map<String, String>> createStore(
             @Parameter(description = "Name of the store to create") @PathVariable String storeName,
             @RequestBody VectorStoreDefinition definition) {
+        ResponseEntity<Map<String, String>> r = rejectIfReplica();
+        if (r != null) return r;
         client.createStore(storeName, definition);
-        return success();
+        return ResponseEntity.ok(success());
     }
 
     @Operation(summary = "Get stats for a vector store")
@@ -71,19 +91,23 @@ public class VectorLiteDebugController {
 
     @Operation(summary = "Delete a vector store")
     @DeleteMapping("/stores/{storeName}")
-    public Map<String, String> dropStore(
+    public ResponseEntity<Map<String, String>> dropStore(
             @Parameter(description = "Store name") @PathVariable String storeName) {
+        ResponseEntity<Map<String, String>> r = rejectIfReplica();
+        if (r != null) return r;
         storeManager.dropStore(storeName);
-        return success();
+        return ResponseEntity.ok(success());
     }
 
     @Operation(summary = "Upsert a single document into a store")
     @PostMapping("/stores/{storeName}/documents")
-    public Map<String, String> upsert(
+    public ResponseEntity<Map<String, String>> upsert(
             @Parameter(description = "Store name") @PathVariable String storeName,
             @RequestBody VectorDocument document) {
+        ResponseEntity<Map<String, String>> r = rejectIfReplica();
+        if (r != null) return r;
         client.upsert(storeName, document);
-        return success();
+        return ResponseEntity.ok(success());
     }
 
     @Operation(summary = "List documents in a vector store")
@@ -117,10 +141,12 @@ public class VectorLiteDebugController {
 
     @Operation(summary = "Delete documents by ID list")
     @DeleteMapping("/stores/{storeName}/documents")
-    public DeleteResult deleteByIds(
+    public ResponseEntity<DeleteResult> deleteByIds(
             @Parameter(description = "Store name") @PathVariable String storeName,
             @RequestBody List<String> ids) {
-        return client.deleteByIds(storeName, ids);
+        ResponseEntity<Map<String, String>> r = rejectIfReplica();
+        if (r != null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        return ResponseEntity.ok(client.deleteByIds(storeName, ids));
     }
 
     @Operation(summary = "Reload store data from persistence")
@@ -133,10 +159,12 @@ public class VectorLiteDebugController {
 
     @Operation(summary = "Persist the latest in-memory data for a store")
     @PostMapping("/stores/{storeName}/refresh")
-    public Map<String, String> refresh(
+    public ResponseEntity<Map<String, String>> refresh(
             @Parameter(description = "Store name") @PathVariable String storeName) {
+        ResponseEntity<Map<String, String>> r = rejectIfReplica();
+        if (r != null) return r;
         client.refresh(storeName);
-        return success();
+        return ResponseEntity.ok(success());
     }
 
     private Map<String, String> success() {

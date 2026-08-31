@@ -239,6 +239,28 @@ public class VectorLiteProperties {
     }
 
     private ConsistencyConfig consistency = new ConsistencyConfig();
+    private NodeConfig node = new NodeConfig();
+
+    public NodeConfig getNode() {
+        return node;
+    }
+
+    public void setNode(NodeConfig node) {
+        this.node = node;
+    }
+
+    public static class NodeConfig {
+        private String role = "master";
+        private String nodeId = "";
+
+        public String getRole() { return role; }
+        public void setRole(String role) { this.role = role; }
+        public String getNodeId() { return nodeId; }
+        public void setNodeId(String nodeId) { this.nodeId = nodeId; }
+
+        public boolean isMaster() { return "master".equalsIgnoreCase(role); }
+        public boolean isReplica() { return "replica".equalsIgnoreCase(role); }
+    }
 
     public ConsistencyConfig getConsistency() {
         return consistency;

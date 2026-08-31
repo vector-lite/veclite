@@ -27,6 +27,8 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
     private static final String FIELD_VERSION = "version";
     private static final String FIELD_URL = "url";
     private static final String FIELD_PROVIDER = "provider";
+    private static final String FIELD_API_KEY = "api_key";
+    private static final String FIELD_DIMENSION = "dimension";
     private static final String FIELD_TIMEOUT = "timeout_millis";
     private static final String FIELD_BATCH_SIZE = "batch_size";
     private static final String FIELD_UPDATED_AT = "updated_at";
@@ -95,6 +97,8 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
             config.setVersion(doc.getString(FIELD_VERSION));
             config.setProvider(doc.getString(FIELD_PROVIDER));
             config.setUrl(doc.getString(FIELD_URL));
+            config.setApiKey(doc.getString(FIELD_API_KEY));
+            config.setDimension(doc.getInteger(FIELD_DIMENSION, 0));
             config.setTimeoutMillis(doc.getInteger(FIELD_TIMEOUT, 3000));
             config.setBatchSize(doc.getInteger(FIELD_BATCH_SIZE, 1));
             result.add(config);
@@ -108,6 +112,8 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
                 .append(FIELD_VERSION, config.getVersion())
                 .append(FIELD_PROVIDER, config.getProvider())
                 .append(FIELD_URL, config.getUrl())
+                .append(FIELD_API_KEY, config.getApiKey())
+                .append(FIELD_DIMENSION, config.getDimension())
                 .append(FIELD_TIMEOUT, config.getTimeoutMillis())
                 .append(FIELD_BATCH_SIZE, config.getBatchSize())
                 .append(FIELD_UPDATED_AT, new Date());

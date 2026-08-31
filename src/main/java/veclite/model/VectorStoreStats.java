@@ -26,7 +26,8 @@ public class VectorStoreStats implements Serializable {
     @Schema(description = "Quantization type applied")
     private QuantizationType quantization;
 
-    @Schema(description = "Bound embedding model for text auto-embedding", example = "text-embedding-demo")
+    @Schema(description = "Embedding model bound to this store (used for text auto-embedding)",
+            example = "text-embedding-v3")
     private String embeddingModel;
 
     public VectorStoreStats() {}

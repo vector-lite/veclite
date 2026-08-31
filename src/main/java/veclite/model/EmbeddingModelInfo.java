@@ -20,6 +20,12 @@ public class EmbeddingModelInfo implements Serializable {
     @Schema(description = "Embedding service endpoint URL")
     private String url;
 
+    @Schema(description = "API key sent as a Bearer token; empty when the endpoint needs no auth")
+    private String apiKey;
+
+    @Schema(description = "Requested output dimension; 0 lets the service decide", example = "512")
+    private int dimension;
+
     @Schema(description = "Request timeout in milliseconds")
     private int timeoutMillis;
 
@@ -40,6 +46,10 @@ public class EmbeddingModelInfo implements Serializable {
     public void setProvider(String provider) { this.provider = provider; }
     public String getUrl() { return url; }
     public void setUrl(String url) { this.url = url; }
+    public String getApiKey() { return apiKey; }
+    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+    public int getDimension() { return dimension; }
+    public void setDimension(int dimension) { this.dimension = dimension; }
     public int getTimeoutMillis() { return timeoutMillis; }
     public void setTimeoutMillis(int timeoutMillis) { this.timeoutMillis = timeoutMillis; }
     public int getBatchSize() { return batchSize; }

@@ -26,8 +26,16 @@ public interface EmbeddingHttpAdapter {
      * @param modelName    请求的模型名（即配置键，直接进入请求体 model 字段）
      * @param modelVersion 模型版本（不参与请求体的协议可忽略）
      * @param texts        本批次的文本列表，非空
+     * @param dimension    调用方期望的目标维度；大于 0 且协议支持时写入请求体，否则忽略
      */
-    List<byte[]> buildRequests(String modelName, String modelVersion, List<String> texts);
+    List<byte[]> buildRequests(String modelName, String modelVersion, List<String> texts, int dimension);
+
+    /**
+     * 兼容旧调用：不指定目标维度。
+     */
+    default List<byte[]> buildRequests(String modelName, String modelVersion, List<String> texts) {
+        return buildRequests(modelName, modelVersion, texts, 0);
+    }
 
     /**
      * 解析单个响应体。返回的向量数与本适配器对应单次请求覆盖的文本数一致，

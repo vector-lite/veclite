@@ -39,8 +39,8 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
 
     /** {@inheritDoc} */
     @Override
-    public List<Float> embed(String modelName, String modelVersion, String text) {
-        List<List<Float>> results = embedBatch(modelName, modelVersion, Collections.singletonList(text));
+    public List<Float> embed(String modelName, String modelVersion, String text, int dimension) {
+        List<List<Float>> results = embedBatch(modelName, modelVersion, Collections.singletonList(text), dimension);
         if (results != null && !results.isEmpty()) {
             return results.get(0);
         }
@@ -49,7 +49,7 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
 
     /** {@inheritDoc} */
     @Override
-    public List<List<Float>> embedBatch(String modelName, String modelVersion, List<String> texts) {
+    public List<List<Float>> embedBatch(String modelName, String modelVersion, List<String> texts, int dimension) {
         VectorLiteProperties.ModelConfig modelConfig = resolveModelConfig(modelName, modelVersion);
         String urlString = modelConfig.getUrl();
         if (urlString == null || urlString.isEmpty()) {
@@ -58,13 +58,15 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
 
         EmbeddingHttpAdapter adapter = EmbeddingHttpAdapter.forProvider(modelConfig.getProvider());
         String effectiveVersion = modelVersion != null ? modelVersion : modelConfig.getVersion();
-        List<byte[]> requestBodies = adapter.buildRequests(modelName, effectiveVersion, texts);
+        // 维度优先级：调用方传入 > 数据源自带配置；两者都未指定时由服务端决定
+        int effectiveDimension = dimension > 0 ? dimension : modelConfig.getDimension();
+        List<byte[]> requestBodies = adapter.buildRequests(modelName, effectiveVersion, texts, effectiveDimension);
 
         try {
             URL url = new URL(urlString);
             List<List<Float>> embeddings = new ArrayList<>(texts.size());
             for (byte[] requestBody : requestBodies) {
-                HttpURLConnection conn = openConnection(url, modelConfig.getTimeoutMillis());
+                HttpURLConnection conn = openConnection(url, modelConfig.getTimeoutMillis(), modelConfig.getApiKey());
                 try (OutputStream os = conn.getOutputStream()) {
                     os.write(requestBody);
                     os.flush();
@@ -88,10 +90,18 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
         }
     }
 
-    private HttpURLConnection openConnection(URL url, int timeoutMillis) throws Exception {
+    /**
+     * 打开 HTTP 连接：统一设置方法、Content-Type、双向超时与可选的 Bearer 鉴权。
+     *
+     * @param apiKey 数据源配置的 API Key；为 null 或空时不发送 Authorization 头
+     */
+    private HttpURLConnection openConnection(URL url, int timeoutMillis, String apiKey) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod(HTTP_METHOD);
         conn.setRequestProperty("Content-Type", JSON_CONTENT_TYPE);
+        if (apiKey != null && !apiKey.isEmpty()) {
+            conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+        }
         conn.setConnectTimeout(timeoutMillis);
         conn.setReadTimeout(timeoutMillis);
         conn.setDoOutput(true);
@@ -126,15 +136,12 @@ public class HttpEmbeddingProvider implements EmbeddingProvider {
     }
 
     /**
-     * 解析请求模型配置；请求模型不存在时沿用既有默认模型回退规则。
+     * 解析模型配置：按（名称， 版本）查找；版本为空时回退该名称的主版本配置。
+     * 请求模型未命中时沿用默认模型回退规则。
      *
      * @param modelName 请求使用的模型名
      * @return 可用于发起 HTTP 请求的模型配置
      * @throws IllegalArgumentException 未找到请求模型及默认模型配置时抛出
-     */
-    /**
-     * 解析模型配置：按（名称， 版本）查找；版本为空时回退该名称的主版本配置。
-     * 请求模型未命中时沿用默认模型回退规则。
      */
     private VectorLiteProperties.ModelConfig resolveModelConfig(String modelName, String modelVersion) {
         VectorLiteProperties.ModelConfig config = registry.find(modelName, modelVersion);

@@ -26,11 +26,15 @@ public final class OpenAiCompatEmbeddingAdapter implements EmbeddingHttpAdapter 
     }
 
     @Override
-    public List<byte[]> buildRequests(String modelName, String modelVersion, List<String> texts) {
+    public List<byte[]> buildRequests(String modelName, String modelVersion, List<String> texts, int dimension) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", modelName);
         body.put("version", modelVersion);
         body.put("input", texts);
+        // OpenAI 兼容协议用 dimensions（复数）表达降维请求；不指定时由服务端决定维度
+        if (dimension > 0) {
+            body.put("dimensions", dimension);
+        }
         return List.of(toBytes(body));
     }
 

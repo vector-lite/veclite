@@ -5,6 +5,7 @@ import { icons, emptyStates } from '../icons.js';
 /** provider 协议选项，与后端 EmbeddingModelRegistry.SUPPORTED_PROVIDERS 一致 */
 const PROVIDER_OPTIONS = [
   { value: 'http', label: 'http' },
+  { value: 'openai', label: 'openai' },
   { value: 'ollama', label: 'ollama' },
   { value: 'ollama-embed', label: 'ollama-embed' },
 ];
@@ -57,7 +58,7 @@ export async function renderSettings(container) {
     body.innerHTML = `
       <div class="table-wrap">
         <table class="table">
-          <thead><tr><th>模型</th><th>版本</th><th>Provider</th><th>URL</th><th>超时</th><th>批量</th><th style="width:110px"></th></tr></thead>
+          <thead><tr><th>模型</th><th>版本</th><th>Provider</th><th>URL</th><th>鉴权</th><th>维度</th><th>超时</th><th>批量</th><th style="width:110px"></th></tr></thead>
           <tbody>
             ${models.map((m) => `
               <tr>
@@ -67,6 +68,8 @@ export async function renderSettings(container) {
                 <td class="mono">${escapeHtml(m.version || '-')}</td>
                 <td><span class="pill">${escapeHtml(m.provider || '-')}</span></td>
                 <td class="mono cell-muted cell-truncate" style="max-width:260px" title="${escapeHtml(m.url || '')}">${escapeHtml(truncate(m.url || '-', 40))}</td>
+                <td class="mono cell-muted">${m.apiKey ? '<span class="pill">已配置</span>' : '—'}</td>
+                <td class="mono cell-muted">${m.dimension > 0 ? m.dimension : '自动'}</td>
                 <td class="mono cell-muted">${m.timeoutMillis}ms</td>
                 <td class="mono cell-muted">${m.batchSize}</td>
                 <td style="text-align:right;white-space:nowrap">
@@ -106,6 +109,8 @@ export async function renderSettings(container) {
       provider: values.provider,
       url: values.url,
       version: values.version || '1',
+      apiKey: values.apiKey || '',
+      dimension: Number(values.dimension) || 0,
       timeoutMillis: Number(values.timeoutMillis) || 3000,
       batchSize: Number(values.batchSize) || 1,
     });
@@ -118,6 +123,8 @@ export async function renderSettings(container) {
         { name: 'url', label: '服务地址', value: model?.url || '', placeholder: 'http://localhost:11434/api/embeddings' },
         { name: 'name', label: '模型名称', value: model?.name || '', disabled: isEdit },
         { name: 'version', label: '模型版本', value: model?.version || '1', disabled: isEdit },
+        { name: 'apiKey', label: 'API Key（可选）', value: model?.apiKey || '', placeholder: '留空表示无需鉴权' },
+        { name: 'dimension', label: '输出维度', type: 'number', value: String(model?.dimension ?? 0), placeholder: '0 = 由服务端决定' },
         { name: 'timeoutMillis', label: '超时（毫秒）', type: 'number', value: String(model?.timeoutMillis || 3000) },
         { name: 'batchSize', label: '批量大小', type: 'number', value: String(model?.batchSize ?? 1) },
       ],

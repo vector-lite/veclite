@@ -35,6 +35,12 @@ public class VectorStoreDefinition implements Serializable {
     @Schema(description = "Metadata fields to build index on for fast filtering")
     private List<String> indexedMetadataFields = new ArrayList<>();
 
+    /**
+     * v2.4 持久化：最新一次成功刷盘到远端（OSS）时生成的快照版本号。
+     * SNAPSHOT_FILE 模式下不写，可为 null。
+     */
+    private String snapshotVersion;
+
     public VectorStoreDefinition() {}
 
     public String getStoreName() { return storeName; }
@@ -53,4 +59,6 @@ public class VectorStoreDefinition implements Serializable {
     public void setQuantization(QuantizationType quantization) { this.quantization = quantization; }
     public List<String> getIndexedMetadataFields() { return indexedMetadataFields; }
     public void setIndexedMetadataFields(List<String> indexedMetadataFields) { this.indexedMetadataFields = indexedMetadataFields; }
+    public String getSnapshotVersion() { return snapshotVersion; }
+    public void setSnapshotVersion(String snapshotVersion) { this.snapshotVersion = snapshotVersion; }
 }

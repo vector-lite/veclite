@@ -28,7 +28,8 @@ public final class OllamaLegacyEmbeddingAdapter implements EmbeddingHttpAdapter 
     }
 
     @Override
-    public List<byte[]> buildRequests(String modelName, String modelVersion, List<String> texts) {
+    public List<byte[]> buildRequests(String modelName, String modelVersion, List<String> texts, int dimension) {
+        // Ollama 的维度是模型自身属性，接口不支持请求级降维，此参数按约定忽略
         List<byte[]> bodies = new ArrayList<>(texts.size());
         for (String text : texts) {
             Map<String, Object> body = new LinkedHashMap<>();

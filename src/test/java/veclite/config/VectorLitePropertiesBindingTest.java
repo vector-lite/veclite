@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class VectorLitePropertiesBindingTest {
 
     @Test
-    @DisplayName("application.yml 中 storage.mongodb.* 应完整绑定（含带鉴权的 uri）")
+    @DisplayName("application.yml 中 storage.mongodb.* 与 storage.postgres.* 应完整绑定")
     void mongodbSectionShouldBindFromApplicationYaml() throws Exception {
         MutablePropertySources sources = new MutablePropertySources();
         List<PropertySource<?>> loaded = new YamlPropertySourceLoader()
@@ -37,10 +37,16 @@ class VectorLitePropertiesBindingTest {
                 .get();
 
         assertEquals(StorageType.MONGODB, properties.getStorage().getType());
-        String uri = properties.getStorage().getMongodb().getUri();
-        assertTrue(uri.contains("@"), "Mongo uri should carry credentials, actual: " + uri);
-        assertTrue(uri.contains("authSource=admin"), "Mongo uri should pin authSource, actual: " + uri);
+        // yml 中的 uri 是无凭证占位（真实凭证经环境变量注入，见下个用例），此处验证占位值完整绑定
+        assertEquals("mongodb://localhost:27017/veclite", properties.getStorage().getMongodb().getUri());
         assertEquals("veclite", properties.getStorage().getMongodb().getDatabase());
+        assertEquals("veclite_document", properties.getStorage().getMongodb().getDocumentCollection());
+
+        // PostgreSQL 配置节同步验证绑定
+        assertEquals("jdbc:postgresql://localhost:5432/veclite",
+                properties.getStorage().getPostgres().getJdbcUrl());
+        assertEquals("veclite_store_meta", properties.getStorage().getPostgres().getMetaTable());
+        assertEquals(1000, properties.getStorage().getPostgres().getFetchSize());
     }
 
     @Test

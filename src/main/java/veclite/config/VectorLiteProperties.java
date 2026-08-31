@@ -148,6 +148,7 @@ public class VectorLiteProperties {
         private OffHeapConfig offHeap = new OffHeapConfig();
         private PayloadConfig payload = new PayloadConfig();
         private MongoConfig mongodb = new MongoConfig();
+        private PostgresConfig postgres = new PostgresConfig();
 
         public StorageType getType() {
             return type;
@@ -187,6 +188,14 @@ public class VectorLiteProperties {
 
         public void setMongodb(MongoConfig mongodb) {
             this.mongodb = mongodb;
+        }
+
+        public PostgresConfig getPostgres() {
+            return postgres;
+        }
+
+        public void setPostgres(PostgresConfig postgres) {
+            this.postgres = postgres;
         }
     }
 
@@ -245,6 +254,98 @@ public class VectorLiteProperties {
 
         public void setScanBatchSize(int scanBatchSize) {
             this.scanBatchSize = scanBatchSize;
+        }
+    }
+
+    /** PostgreSQL 单一真相源持久化（StorageType.POSTGRES）的连接与表配置 */
+    public static class PostgresConfig {
+        private String jdbcUrl = "jdbc:postgresql://localhost:5432/veclite";
+        private String username = "postgres";
+        private String password = "";
+        private String documentTable = "veclite_document";
+        private String metaTable = "veclite_store_meta";
+        private String embeddingModelTable = "veclite_embedding_model";
+
+        /** 游标扫描批大小：对应 JDBC 的 fetchSize，控制启动装载时的内存占用 */
+        private int fetchSize = 1000;
+
+        public String getJdbcUrl() {
+            return jdbcUrl;
+        }
+
+        public void setJdbcUrl(String jdbcUrl) {
+            this.jdbcUrl = jdbcUrl;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public String getDocumentTable() {
+            return documentTable;
+        }
+
+        public void setDocumentTable(String documentTable) {
+            this.documentTable = documentTable;
+        }
+
+        public String getMetaTable() {
+            return metaTable;
+        }
+
+        public void setMetaTable(String metaTable) {
+            this.metaTable = metaTable;
+        }
+
+        public String getEmbeddingModelTable() {
+            return embeddingModelTable;
+        }
+
+        public void setEmbeddingModelTable(String embeddingModelTable) {
+            this.embeddingModelTable = embeddingModelTable;
+        }
+
+        public int getFetchSize() {
+            return fetchSize;
+        }
+
+        public void setFetchSize(int fetchSize) {
+            this.fetchSize = fetchSize;
+        }
+    }
+
+    /** 落盘前是否强制校验 vec / payload / idIndex 三者 size 一致（Fail-Fast 不变量断言） */
+    private ConsistencyConfig consistency = new ConsistencyConfig();
+
+    public ConsistencyConfig getConsistency() {
+        return consistency;
+    }
+
+    public void setConsistency(ConsistencyConfig consistency) {
+        this.consistency = consistency;
+    }
+
+    public static class ConsistencyConfig {
+        private boolean strict = false;
+
+        public boolean isStrict() {
+            return strict;
+        }
+
+        public void setStrict(boolean strict) {
+            this.strict = strict;
         }
     }
 
@@ -307,6 +408,8 @@ public class VectorLiteProperties {
         private String version = "1";
         private String provider = "http";
         private String url;
+        private String apiKey;
+        private int dimension = 0;
         private int timeoutMillis = 1000;
         private int batchSize = 1;
 
@@ -340,6 +443,22 @@ public class VectorLiteProperties {
 
         public void setUrl(String url) {
             this.url = url;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
+        public int getDimension() {
+            return dimension;
+        }
+
+        public void setDimension(int dimension) {
+            this.dimension = dimension;
         }
 
         public int getTimeoutMillis() {

@@ -35,6 +35,9 @@ dependencies {
     implementation("org.mongodb:mongodb-driver-sync")
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springdoc:springdoc-openapi-ui:1.7.0")
+    // v2.5 PostgreSQL 单一真相源持久化（StorageType.POSTGRES），版本由 Spring Boot BOM 管理
+    implementation("org.postgresql:postgresql:42.7.3")
+    implementation("org.springframework.boot:spring-boot-starter-jdbc")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }

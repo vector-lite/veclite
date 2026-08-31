@@ -244,6 +244,8 @@ public class EmbeddingModelRegistry {
         copy.setVersion(source.getVersion());
         copy.setProvider(source.getProvider());
         copy.setUrl(source.getUrl());
+        copy.setApiKey(source.getApiKey());
+        copy.setDimension(source.getDimension());
         copy.setTimeoutMillis(source.getTimeoutMillis());
         copy.setBatchSize(source.getBatchSize());
         return copy;

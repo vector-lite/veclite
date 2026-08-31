@@ -136,7 +136,7 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
                 + FIELD_STORE_NAME + ", " + FIELD_DOC_ID + ", " + FIELD_DOC_TEXT + ", " + FIELD_METADATA + ", "
                 + FIELD_VECTOR_FORMAT + ", " + FIELD_VECTOR + ", " + FIELD_VECTOR_DIM + ", "
                 + FIELD_EMBEDDING_MODEL + ", " + FIELD_UPDATED_AT + ") "
-                + "VALUES (?,?,?::jsonb,?::jsonb,?,?,?,?,?) "
+                + "VALUES (?,?,?,?::jsonb,?,?,?,?,?) "
                 + "ON CONFLICT (" + FIELD_STORE_NAME + ", " + FIELD_DOC_ID + ") DO UPDATE SET "
                 + FIELD_DOC_TEXT + "=EXCLUDED." + FIELD_DOC_TEXT + ", "
                 + FIELD_METADATA + "=EXCLUDED." + FIELD_METADATA + ", "

@@ -743,8 +743,40 @@ public class LocalVectorStore {
         } else if (filter.getOperator() == FilterExpression.Operator.IN) {
             List<Object> values = filter.getValues();
             return values != null && values.contains(metaValue);
+        } else if (filter.getOperator() == FilterExpression.Operator.GT
+                || filter.getOperator() == FilterExpression.Operator.LT) {
+            return compareNumeric(metaValue, filter.getValue())
+                    == (filter.getOperator() == FilterExpression.Operator.GT
+                            ? 1 : -1);
         }
         return true;
+    }
+
+    /**
+     * 把元数据值与过滤值都按数值比较。无法转成数字的视为不可比较，返回 -2（外层比较结果不会等于 ±1 → 不命中）。
+     * 这样前端把"123"传过来，元数据是 Integer/Long/Double 都能比较；
+     * 字符串"abc"或布尔值不会被错误地按数字排。
+     */
+    private static int compareNumeric(Object metaValue, Object filterValue) {
+        if (metaValue == null || filterValue == null) {
+            return -2;
+        }
+        Double a = toDouble(metaValue);
+        Double b = toDouble(filterValue);
+        if (a == null || b == null) {
+            return -2;
+        }
+        return Double.compare(a, b);
+    }
+
+    private static Double toDouble(Object o) {
+        if (o instanceof Number) return ((Number) o).doubleValue();
+        if (o instanceof String) {
+            try { return Double.parseDouble((String) o); }
+            catch (NumberFormatException e) { return null; }
+        }
+        if (o instanceof Boolean) return ((Boolean) o) ? 1.0 : 0.0;
+        return null;
     }
 
     // -- 专门提供给 SnapshotFileStorage 持久化使用的包级访问器 --

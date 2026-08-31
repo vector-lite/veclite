@@ -12,7 +12,9 @@ public class FilterExpression implements Serializable {
     @Schema(description = "Comparison operator")
     public enum Operator {
         EQ,
-        IN
+        IN,
+        GT,
+        LT
     }
 
     @Schema(description = "Metadata field name to filter on", example = "category")

@@ -7,6 +7,10 @@ gradle/wrapper/*.class
 !**/src/test/**/build/
 logs
 
+# Runtime generated data (do not commit local mmap snapshots)
+data/
+**/data/
+
 ### STS ###
 .apt_generated
 .classpath

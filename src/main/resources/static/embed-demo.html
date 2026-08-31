@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>VecLite Embedding 演示</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+            margin: 0;
+            padding: 16px;
+            color: #1f2937;
+            background: #f3f4f6;
+            min-height: 100vh;
+        }
+        h1 { color: #111827; margin: 0 0 4px; font-size: 20px; }
+        .subtitle { color: #6b7280; margin-bottom: 14px; font-size: 13px; }
+
+        /* ===== 顶部全局设置 ===== */
+        .topbar {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px 16px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        }
+        .topbar input { flex: 1; }
+        .conn-status { font-size: 13px; }
+        .ok { color: #059669; }
+        .err { color: #dc2626; }
+
+        /* ===== 节点状态条 ===== */
+        .nodebar {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        }
+        .nodebar .row {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            font-size: 12px;
+            align-items: center;
+        }
+        .nodebar .label { color: #6b7280; }
+        .nodebar .val { color: #111827; font-family: ui-monospace, monospace; font-weight: 600; }
+        .nodebar .role-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .role-tag.master { background: #fee2e2; color: #b91c1c; }
+        .role-tag.replica { background: #dbeafe; color: #1d4ed8; }
+
+        /* ===== Tab 栏 ===== */
+        .tabs {
+            display: flex;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+            overflow: hidden;
+        }
+        .tab {
+            padding: 12px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #6b7280;
+            border-right: 1px solid #e5e7eb;
+            transition: all 0.15s;
+            font-weight: 500;
+        }
+        .tab:hover { background: #f9fafb; color: #1f2937; }
+        .tab.active {
+            background: white;
+            color: #1d4ed8;
+            box-shadow: inset 0 -2px 0 #3b82f6;
+        }
+
+        /* ===== 主体两栏 ===== */
+        .workspace {
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 0;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 0 0 8px 8px;
+            min-height: 600px;
+            overflow: hidden;
+        }
+        .left-panel, .right-panel {
+            padding: 16px;
+            overflow: auto;
+        }
+        .left-panel {
+            border-right: 1px solid #e5e7eb;
+            background: #fafbfc;
+        }
+        .right-panel { background: white; }
+        .section { margin-bottom: 18px; }
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .form-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+        .form-row.vertical { flex-direction: column; align-items: stretch; }
+        .form-row label { font-size: 12px; color: #4b5563; min-width: 64px; }
+        input, textarea, select, button {
+            padding: 7px 10px;
+            font-size: 13px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-family: inherit;
+            background: white;
+        }
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+        textarea { font-family: ui-monospace, monospace; font-size: 12px; }
+        button {
+            cursor: pointer;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        button:hover { background: #2563eb; }
+        button.secondary { background: #6b7280; }
+        button.secondary:hover { background: #4b5563; }
+        button.danger { background: #dc2626; }
+        button.danger:hover { background: #b91c1c; }
+        button.success { background: #059669; }
+        button.success:hover { background: #047857; }
+        button:disabled { background: #d1d5db; cursor: not-allowed; }
+        button.small { padding: 4px 8px; font-size: 12px; }
+
+        /* ===== API 调用记录面板 ===== */
+        .api-log {
+            background: #1f2937;
+            color: #e5e7eb;
+            border-radius: 6px;
+            padding: 10px 12px;
+            font-family: ui-monospace, monospace;
+            font-size: 11px;
+            max-height: 280px;
+            overflow: auto;
+            margin-bottom: 12px;
+        }
+        .api-log .entry { margin-bottom: 4px; line-height: 1.5; }
+        .api-log .method-GET { color: #93c5fd; }
+        .api-log .method-POST { color: #86efac; }
+        .api-log .method-DELETE { color: #fca5a5; }
+        .api-log .status-2xx { color: #86efac; font-weight: 600; }
+        .api-log .status-4xx { color: #fde047; font-weight: 600; }
+        .api-log .status-5xx { color: #fca5a5; font-weight: 600; }
+        .api-log .latency { color: #d8b4fe; }
+        .api-log .ts { color: #6b7280; }
+
+        /* ===== 列表/卡片 ===== */
+        .result-list { list-style: none; padding: 0; margin: 0; }
+        .result-list li {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            border-radius: 6px;
+            border-left: 3px solid #3b82f6;
+        }
+        .result-list .score {
+            color: #1d4ed8;
+            font-weight: 600;
+            font-family: ui-monospace, monospace;
+        }
+        .empty { color: #9ca3af; text-align: center; padding: 20px; font-size: 13px; }
+
+        /* ===== Store 卡片 ===== */
+        .store-card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .store-card:hover { border-color: #3b82f6; }
+        .store-card.active {
+            background: #dbeafe;
+            border-color: #3b82f6;
+        }
+        .store-card .name {
+            font-family: ui-monospace, monospace;
+            font-weight: 600;
+            color: #111827;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .store-card .meta { font-size: 11px; color: #6b7280; margin-top: 2px; }
+        .source-tag {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .source-tag.oss { background: #fef3c7; color: #b45309; }
+        .source-tag.local { background: #dbeafe; color: #1d4ed8; }
+        .source-tag.memory { background: #f3e8ff; color: #6b21a8; }
+        .source-tag.unknown { background: #e5e7eb; color: #4b5563; }
+
+        /* ===== 存储信息块 ===== */
+        .storage-info {
+            background: #f0f9ff;
+            border: 1px solid #bae6fd;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+        .storage-info h4 {
+            margin: 0 0 8px;
+            font-size: 12px;
+            color: #075985;
+            font-weight: 600;
+        }
+        .storage-info .item {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 4px;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .storage-info .item .k {
+            color: #0369a1;
+            min-width: 80px;
+            font-weight: 500;
+        }
+        .storage-info .item .v {
+            color: #0c4a6e;
+            font-family: ui-monospace, monospace;
+            word-break: break-all;
+            flex: 1;
+        }
+        .storage-info .item .v.empty { color: #9ca3af; font-style: italic; }
+
+        /* ===== 集群拓扑图 ===== */
+        .cluster-topo {
+            background: #1e293b;
+            color: #e2e8f0;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 12px;
+            font-family: ui-monospace, monospace;
+            font-size: 11px;
+            line-height: 1.6;
+        }
+        .cluster-topo .row { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+        .cluster-topo .arrow { color: #94a3b8; }
+        .cluster-topo .self { color: #fde047; font-weight: 600; }
+        .cluster-topo .node { color: #93c5fd; }
+        .cluster-topo .center { color: #86efac; }
+
+        /* ===== 配置表 ===== */
+        .config-table {
+            display: grid;
+            grid-template-columns: max-content 1fr;
+            gap: 4px 12px;
+            font-size: 12px;
+        }
+        .config-table .k { color: #6b7280; }
+        .config-table .v { color: #111827; font-family: ui-monospace, monospace; }
+
+        /* ===== FilterBuilder ===== */
+        .filter-builder {
+            background: white;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 10px;
+        }
+        .filter-builder .head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .filter-builder .head .title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #374151;
+        }
+        .filter-builder .row {
+            display: grid;
+            grid-template-columns: 1fr 90px 1fr;
+            gap: 6px;
+            align-items: center;
+        }
+        .filter-builder .row .val-cell { display: flex; gap: 4px; }
+        .filter-builder .row .val-cell input { flex: 1; }
+        .filter-builder .summary {
+            margin-top: 8px;
+            padding: 6px 8px;
+            background: #f3f4f6;
+            border-radius: 4px;
+            font-family: ui-monospace, monospace;
+            font-size: 11px;
+            color: #4b5563;
+            word-break: break-all;
+        }
+
+        /* ===== 检索结果 ===== */
+        .search-result {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            border-radius: 6px;
+            border-left: 3px solid #3b82f6;
+        }
+        .search-result .top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+        .search-result .text { color: #374151; font-size: 13px; }
+        .search-result .meta { color: #6b7280; font-size: 11px; margin-top: 4px; }
+        .rank-tag {
+            background: #3b82f6;
+            color: white;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-family: ui-monospace, monospace;
+        }
+
+        /* ===== 文档表格 ===== */
+        .docs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .docs-table th {
+            background: #f3f4f6;
+            text-align: left;
+            padding: 8px 10px;
+            font-weight: 600;
+            color: #374151;
+            border-bottom: 1px solid #e5e7eb;
+            position: sticky;
+            top: 0;
+        }
+        .docs-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #f3f4f6;
+            font-family: ui-monospace, monospace;
+        }
+        .docs-table tr:hover { background: #fafbfc; }
+        .pagination {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 12px;
+            font-size: 12px;
+            color: #6b7280;
+        }
+        .pagination .pages button {
+            margin: 0 2px;
+            padding: 4px 8px;
+            background: white;
+            color: #374151;
+            border: 1px solid #d1d5db;
+        }
+        .pagination .pages button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+
+        /* ===== Toast ===== */
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 18px;
+            background: #1f2937;
+            color: white;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: all 0.2s;
+            font-size: 13px;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.ok { background: #059669; }
+        .toast.err { background: #dc2626; }
+
+        .hidden { display: none !important; }
+
+        /* ===== 模态对话框（创建 Store） ===== */
+        .modal-dialog {
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            padding: 0;
+            width: 520px;
+            max-width: 90vw;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            background: white;
+        }
+        .modal-dialog::backdrop { background: rgba(0,0,0,0.4); }
+        .modal-form { padding: 20px; }
+        .modal-form h3 {
+            margin: 0 0 16px;
+            font-size: 16px;
+            color: #111827;
+            border-bottom: 1px solid #e5e7eb;
+            padding-bottom: 10px;
+        }
+        .modal-row { margin-bottom: 12px; display: flex; flex-direction: column; }
+        .modal-row label { font-size: 12px; color: #4b5563; margin-bottom: 4px; font-weight: 500; }
+        .modal-row .req { color: #dc2626; }
+        .modal-row .hint { font-size: 11px; color: #6b7280; margin-top: 3px; }
+        .modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .modal-err { color: #dc2626; font-size: 12px; margin: 8px 0; min-height: 16px; }
+        .modal-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid #e5e7eb;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 VecLite Embedding 演示</h1>
+    <p class="subtitle">文本向量化 + 存储 + 检索 + OSS 持久化 + 集群协调 全链路演示</p>
+
+    <!-- 顶部条 -->
+    <div class="topbar">
+        <label style="font-size:12px;color:#4b5563;">后端：</label>
+        <input id="baseUrl" type="text" value="http://localhost:8088/veclite/api/v1">
+        <button onclick="testConnection()">测试连接</button>
+        <span id="connectionStatus" class="conn-status"></span>
+    </div>
+
+    <!-- 节点状态条 -->
+    <div class="nodebar" id="nodebar">
+        <div class="row">
+            <span class="label">节点角色：</span>
+            <span id="nodeRole" class="role-tag master">master</span>
+            <span class="label">Node ID：</span>
+            <span id="nodeId" class="val">—</span>
+            <span class="label">PG：</span>
+            <span id="pgStatus" class="val">—</span>
+            <button class="small secondary" onclick="refreshNodeInfo()">刷新</button>
+        </div>
+    </div>
+
+    <!-- 集群拓扑示意 -->
+    <div class="cluster-topo" id="clusterTopo">
+        <div class="row"><span class="center">⏳ 加载中...</span></div>
+    </div>
+
+    <!-- API 调用记录面板 -->
+    <div class="section">
+        <div class="section-title">📡 API 调用记录（最近 20 次）</div>
+        <div class="api-log" id="apiLog">
+            <div class="entry"><span class="ts">--:--:--</span> 等待首次调用...</div>
+        </div>
+    </div>
+
+    <!-- Tab 栏 -->
+    <div class="tabs">
+        <div class="tab active" data-tab="store" onclick="switchTab('store')">📦 Store 管理</div>
+        <div class="tab" data-tab="upsert" onclick="switchTab('upsert')">💾 存文档</div>
+        <div class="tab" data-tab="search" onclick="switchTab('search')">🔍 检索</div>
+        <div class="tab" data-tab="docs" onclick="switchTab('docs')">📋 文档列表</div>
+    </div>
+
+    <!-- 工作区 -->
+    <div class="workspace">
+        <div class="left-panel" id="leftPanel"></div>
+        <div class="right-panel" id="rightPanel"></div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <!-- 创建 Store 模态对话框 -->
+    <dialog id="createStoreDialog" class="modal-dialog">
+        <form method="dialog" onsubmit="event.preventDefault();submitCreateStore();" class="modal-form">
+            <h3>新建向量库 Store</h3>
+            <div class="modal-row">
+                <label>名称 <span class="req">*</span></label>
+                <input id="csName" type="text" placeholder="如: knowledge_base" required>
+            </div>
+            <div class="modal-grid">
+                <div class="modal-row">
+                    <label>维度</label>
+                    <select id="csDim">
+                        <option value="64">64</option>
+                        <option value="128">128</option>
+                        <option value="256">256</option>
+                        <option value="512">512</option>
+                        <option value="768">768</option>
+                        <option value="1024" selected>1024（推荐，text-embedding-v3 默认）</option>
+                    </select>
+                    <div class="hint">阿里云 text-embedding-v3 合法维度</div>
+                </div>
+                <div class="modal-row">
+                    <label>距离度量</label>
+                    <select id="csMetric">
+                        <option value="COSINE" selected>COSINE（余弦）</option>
+                        <option value="L2">L2（欧氏距离）</option>
+                        <option value="DOT_PRODUCT">DOT_PRODUCT（点积）</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-grid">
+                <div class="modal-row">
+                    <label>量化</label>
+                    <select id="csQuant">
+                        <option value="NONE">NONE（不量化）</option>
+                        <option value="SQ8" selected>SQ8（标量量化）</option>
+                    </select>
+                </div>
+                <div class="modal-row">
+                    <label>最大容量</label>
+                    <input id="csCapacity" type="number" value="100000" min="1000" max="10000000" step="10000">
+                </div>
+            </div>
+            <div class="modal-row">
+                <label>Embedding 模型</label>
+                <input id="csModel" type="text" value="text-embedding-v3" placeholder="如: text-embedding-v3（留空则不绑定）">
+            </div>
+            <div class="modal-row">
+                <label>元数据过滤字段</label>
+                <input id="csFields" type="text" placeholder="逗号分隔，如: category, tag, source">
+                <div class="hint">只有列在这里的字段才能在「检索」时用于元数据过滤</div>
+            </div>
+            <div id="csError" class="modal-err"></div>
+            <div class="modal-actions">
+                <button type="button" class="secondary" onclick="$('createStoreDialog').close()">取消</button>
+                <button type="submit">确认创建</button>
+            </div>
+        </form>
+    </dialog>
+
+    <script>
+        // ============================================================
+        // 全局状态
+        // ============================================================
+        let _storeDetails = [];
+        let _currentStore = null;
+        let _currentTab = 'store';
+        let _docsPage = 0;
+        let _docsPageSize = 20;
+        let _docsTotal = 0;
+        let _docsData = [];
+        let _searchResults = [];
+        let _searchLatency = 0;
+        let _apiLog = [];   // API 调用记录
+
+        // 节点信息（从后端读不到就回退到前端猜测）
+        let _nodeInfo = {
+            role: 'master',  // 默认假设
+            nodeId: '?',
+            pgConnected: false,
+            storeCount: 0,
+        };
+
+        // ============================================================
+        // 工具
+        // ============================================================
+        function $(id) { return document.getElementById(id); }
+        function getBaseUrl() { return $('baseUrl').value.trim().replace(/\/$/, ''); }
+        function getCurrentStoreName() { return _currentStore ? _currentStore.storeName : ''; }
+        function showToast(msg, type) {
+            const t = $('toast');
+            t.textContent = msg;
+            t.className = 'toast show ' + (type || '');
+            setTimeout(() => t.className = 'toast ' + (type || ''), 2200);
+        }
+        function sourceTag(source) {
+            if (source === 'OSS') return '<span class="source-tag oss">🟢 OSS</span>';
+            if (source === 'LOCAL') return '<span class="source-tag local">📁 LOCAL</span>';
+            if (source === 'IN_MEMORY') return '<span class="source-tag memory">⚪ 内存</span>';
+            return '<span class="source-tag unknown">❓ 未知</span>';
+        }
+
+        // ============================================================
+        // API 调用记录器
+        // ============================================================
+        function logApi(method, path, status, latencyMs, body) {
+            const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            const entry = { ts, method, path, status, latencyMs, body };
+            _apiLog.unshift(entry);
+            if (_apiLog.length > 20) _apiLog = _apiLog.slice(0, 20);
+            renderApiLog();
+        }
+        function renderApiLog() {
+            const el = $('apiLog');
+            if (_apiLog.length === 0) {
+                el.innerHTML = '<div class="entry"><span class="ts">--:--:--</span> 等待首次调用...</div>';
+                return;
+            }
+            el.innerHTML = _apiLog.map(e => {
+                const statusClass = e.status >= 500 ? 'status-5xx' : e.status >= 400 ? 'status-4xx' : 'status-2xx';
+                const methodClass = 'method-' + e.method;
+                const bodyStr = e.body ? ` <span style="color:#9ca3af">${escapeHtml(JSON.stringify(e.body).slice(0, 120))}</span>` : '';
+                return `<div class="entry">
+                    <span class="ts">[${e.ts}]</span>
+                    <span class="${methodClass}">${e.method.padEnd(6)}</span>
+                    <span>${escapeHtml(e.path)}</span>
+                    <span class="${statusClass}"> → ${e.status}</span>
+                    <span class="latency"> (${e.latencyMs}ms)</span>
+                    ${bodyStr}
+                </div>`;
+            }).join('');
+        }
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        // ============================================================
+        // 增强的 api()：记录每次调用
+        // ============================================================
+        async function api(path, options) {
+            const url = getBaseUrl() + path;
+            const opts = options || {};
+            opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+            const method = (opts.method || 'GET').toUpperCase();
+            const body = opts.body ? safeParse(opts.body) : null;
+            const t0 = performance.now();
+            let resp, text, data, error = null;
+            try {
+                resp = await fetch(url, opts);
+                text = await resp.text();
+                try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
+                if (!resp.ok) {
+                    error = (data && (data.message || data.error)) || ('HTTP ' + resp.status);
+                }
+            } catch (e) {
+                error = e.message;
+                resp = { status: 0 };
+            }
+            const latency = Math.round(performance.now() - t0);
+            logApi(method, path, resp.status || 0, latency, body);
+            if (error) throw new Error(error);
+            return data;
+        }
+        function safeParse(s) { try { return JSON.parse(s); } catch (e) { return s; } }
+
+        // ============================================================
+        // Tab 切换
+        // ============================================================
+        function switchTab(name) {
+            _currentTab = name;
+            document.querySelectorAll('.tab').forEach(t => {
+                t.classList.toggle('active', t.dataset.tab === name);
+            });
+            renderTab();
+        }
+
+        function renderTab() {
+            if (_currentTab === 'store') renderStoreTab();
+            else if (_currentTab === 'upsert') renderUpsertTab();
+            else if (_currentTab === 'search') renderSearchTab();
+            else if (_currentTab === 'docs') renderDocsTab();
+        }
+
+        // ============================================================
+        // 节点状态条
+        // ============================================================
+        function renderNodeBar() {
+            const roleTag = $('nodeRole');
+            roleTag.textContent = _nodeInfo.role;
+            roleTag.className = 'role-tag ' + _nodeInfo.role;
+            $('nodeId').textContent = _nodeInfo.nodeId || '(未配置)';
+            const pgEl = $('pgStatus');
+            pgEl.textContent = _nodeInfo.pgConnected ? '✅ 已连接' : '❌ 未连';
+            pgEl.style.color = _nodeInfo.pgConnected ? '#059669' : '#dc2626';
+        }
+        function renderClusterTopo() {
+            const el = $('clusterTopo');
+            const myRole = _nodeInfo.role;
+            const myId = _nodeInfo.nodeId;
+            // 模拟的集群视图（实际后端没暴露节点列表，前端基于角色猜测）
+            el.innerHTML = `
+                <div class="row">
+                    <span>🌐 集群视图（3 master + 6 replica）</span>
+                </div>
+                <div class="row">
+                    <span>          </span>
+                    <span class="center">[PostgreSQL: veclite_store_meta]</span>
+                </div>
+                <div class="row">
+                    <span>          </span>
+                    <span class="arrow">↑↓</span>
+                    <span class="center">[OSS: veclite/snapshots/]</span>
+                </div>
+                <div class="row">
+                    <span>  Masters (写):</span>
+                    <span class="node">[master-1]</span><span class="node">[master-2]</span><span class="node">[master-3]</span>
+                </div>
+                <div class="row">
+                    <span>  Replicas (读):</span>
+                    <span class="node">[r-1]</span><span class="node">[r-2]</span><span class="node">[r-3]</span>
+                    <span class="node">[r-4]</span><span class="node">[r-5]</span><span class="node">[r-6]</span>
+                </div>
+                <div class="row">
+                    <span>  你 (${myRole}):</span>
+                    <span class="self">[${myId || 'self'}] ← 当前</span>
+                </div>
+                <div class="row" style="margin-top:6px;color:#94a3b8;font-size:10px;">
+                    <span>  * 实际节点列表需从注册中心拉，本视图为示意</span>
+                </div>
+            `;
+        }
+        async function refreshNodeInfo() {
+            // 后端没暴露 /node 端点，先通过探测推断
+            try {
+                const stores = await api('/stores');
+                _nodeInfo.storeCount = (stores || []).length;
+                _nodeInfo.pgConnected = true;
+                // 探测 role：尝试调一个写接口看是否 403
+                try {
+                    await api('/stores/__probe_role_test__', { method: 'POST', body: '{}' });
+                    _nodeInfo.role = 'master';
+                } catch (e) {
+                    if (String(e.message).includes('403') || String(e.message).includes('REJECTED')) {
+                        _nodeInfo.role = 'replica';
+                    } else {
+                        _nodeInfo.role = 'master';
+                    }
+                }
+                _nodeInfo.nodeId = 'node-' + (_nodeInfo.role === 'master' ? '1' : 'r-1');
+            } catch (e) {
+                _nodeInfo.pgConnected = false;
+            }
+            renderNodeBar();
+            renderClusterTopo();
+        }
+
+        // ============================================================
+        // Store 管理 Tab
+        // ============================================================
+        async function renderStoreTab() {
+            $('leftPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">已创建的 Store</div>
+                    <button onclick="openCreateDialog()">+ 新建 Store</button>
+                    <button class="secondary" onclick="loadStores()" style="margin-left:4px;">🔄 刷新</button>
+                </div>
+                <div id="storeList" class="result-list"></div>
+            `;
+            $('rightPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">当前 Store 详情</div>
+                    <div id="storeDetail">请选择左侧一个 Store 查看详情</div>
+                </div>
+            `;
+            await loadStores();
+        }
+        async function loadStores() {
+            const list = $('storeList');
+            list.innerHTML = '<div class="empty">加载中...</div>';
+            try {
+                const names = await api('/stores');
+                _storeDetails = await api('/stores/_details');
+                if (!names || names.length === 0) {
+                    list.innerHTML = '<div class="empty">还没有 Store，点击"新建"</div>';
+                    return;
+                }
+                list.innerHTML = names.map(name => {
+                    const d = (_storeDetails || []).find(s => s.storeName === name) || {};
+                    const active = _currentStore && _currentStore.storeName === name;
+                    const isReadOnly = _nodeInfo.role === 'replica';
+                    return `<li class="store-card ${active ? 'active' : ''}" onclick="selectStore('${escapeHtml(name)}')">
+                        <div class="name">${escapeHtml(name)} ${sourceTag(d.storageSource)}</div>
+                        <div class="meta">dim=${d.dimension} metric=${d.metric} count=${d.docCount || 0} quant=${d.quantization || '-'}${isReadOnly ? ' <span style="color:#dc2626;">[只读]</span>' : ''}</div>
+                    </li>`;
+                }).join('');
+            } catch (e) {
+                list.innerHTML = `<div class="empty">加载失败: ${e.message}</div>`;
+            }
+        }
+        async function selectStore(name) {
+            const d = (_storeDetails || []).find(s => s.storeName === name) || { storeName: name };
+            _currentStore = d;
+            document.querySelectorAll('.store-card').forEach(el => el.classList.remove('active'));
+            const evt = window.event;
+            if (evt && evt.currentTarget) evt.currentTarget.classList.add('active');
+            // 切 tab 时再 render 一次详情
+            if (_currentTab === 'store') renderStoreDetail();
+        }
+        async function renderStoreDetail() {
+            const s = _currentStore;
+            const el = $('storeDetail');
+            if (!s) { el.innerHTML = '请选择左侧一个 Store'; return; }
+            const isReadOnly = _nodeInfo.role === 'replica';
+            el.innerHTML = `
+                <div class="config-table">
+                    <div class="k">storeName</div><div class="v">${escapeHtml(s.storeName)}</div>
+                    <div class="k">dimension</div><div class="v">${s.dimension || '-'}</div>
+                    <div class="k">metric</div><div class="v">${s.metric || '-'}</div>
+                    <div class="k">docCount</div><div class="v">${s.docCount || 0}</div>
+                    <div class="k">quantization</div><div class="v">${s.quantization || '-'}</div>
+                    <div class="k">maxCapacity</div><div class="v">${s.maxCapacity || '-'}</div>
+                    <div class="k">embeddingModel</div><div class="v">${s.embeddingModel || '-'}</div>
+                    <div class="k">embeddingModelVersion</div><div class="v">${s.embeddingModelVersion || '-'}</div>
+                    <div class="k">storageSource</div><div class="v">${s.storageSource || '-'}</div>
+                </div>
+                <div class="storage-info">
+                    <h4>💾 存储信息（4 角色：内存 / 磁盘 / OSS / PG）</h4>
+                    <div class="item">
+                        <div class="k">内存:</div>
+                        <div class="v">ConcurrentHashMap&lt;storeName, LocalVectorStore&gt;<br>
+                        包含 OffHeapSQ8Buffer / IdOffsetIndex / MetadataFilterIndex / PayloadStorage</div>
+                    </div>
+                    <div class="item">
+                        <div class="k">本地磁盘:</div>
+                        <div class="v">./data/vector-lite/${escapeHtml(s.storeName)}/<br>
+                        vectors.bin / documents.jsonl / store.json (mmap)</div>
+                    </div>
+                    <div class="item">
+                        <div class="k">OSS:</div>
+                        <div class="v" id="ossPath">点击「刷新存储」查询</div>
+                    </div>
+                    <div class="item">
+                        <div class="k">PG:</div>
+                        <div class="v" id="pgPath">点击「刷新存储」查询</div>
+                    </div>
+                    <button class="small" onclick="loadStorageInfo('${escapeHtml(s.storeName)}')">🔄 刷新存储信息</button>
+                </div>
+                <div style="margin-top:12px;">
+                    <button class="danger small" onclick="dropStore('${escapeHtml(s.storeName)}')" ${isReadOnly ? 'disabled' : ''}>🗑️ 删除 Store</button>
+                    ${isReadOnly ? '<span style="color:#dc2626;font-size:12px;margin-left:8px;">⚠️ replica 节点不能删除</span>' : ''}
+                </div>
+            `;
+        }
+        async function loadStorageInfo(storeName) {
+            try {
+                // 后端没暴露 OSS / PG 路径查询接口，只用 /stats 这条已存在的接口回填可观察信息。
+                const stats = await api('/stores/' + encodeURIComponent(storeName) + '/stats');
+                // OSS 路径：从 application.yml 的 veclite.storage.oss 配置推断，PG 路径同理——本演示页不调后端查询。
+                $('ossPath').textContent = `OSS 路径：veclite/snapshots/${storeName}/（来自 veclite.storage.oss.key-prefix，待后端暴露查询接口）`;
+                $('pgPath').textContent = `PG 行：veclite_store_meta 表（schema 由后端定义，docCount=${stats.docCount}，storageSource=${stats.storageSource}）`;
+            } catch (e) {
+                $('ossPath').innerHTML = '<span class="empty">查询失败: ' + e.message + '</span>';
+                $('pgPath').innerHTML = '<span class="empty">查询失败: ' + e.message + '</span>';
+            }
+        }
+        async function openCreateDialog() {
+            if (_nodeInfo.role === 'replica') {
+                showToast('replica 节点不能创建 Store', 'err');
+                return;
+            }
+            $('csError').textContent = '';
+            $('createStoreDialog').showModal();
+        }
+        async function submitCreateStore() {
+            const name = $('csName').value.trim();
+            if (!name) { $('csError').textContent = '名称必填'; return; }
+            const fields = $('csFields').value.trim()
+                ? $('csFields').value.split(',').map(s => s.trim()).filter(Boolean)
+                : [];
+            const body = {
+                dimension: parseInt($('csDim').value),
+                metric: $('csMetric').value,
+                maxCapacity: parseInt($('csCapacity').value),
+                quantization: $('csQuant').value,
+                embeddingModel: $('csModel').value.trim() || null,
+                indexedMetadataFields: fields,
+            };
+            try {
+                await api('/stores/' + encodeURIComponent(name), { method: 'POST', body: JSON.stringify(body) });
+                showToast('Store 创建成功', 'ok');
+                $('createStoreDialog').close();
+                await loadStores();
+            } catch (e) {
+                $('csError').textContent = e.message;
+            }
+        }
+        async function dropStore(name) {
+            if (_nodeInfo.role === 'replica') {
+                showToast('replica 节点不能删除', 'err');
+                return;
+            }
+            if (!confirm('确认删除 Store [' + name + ']?\nOSS/磁盘上的 snapshot 文件会保留，由 OrphanCleanScheduler 兜底清理')) return;
+            try {
+                await api('/stores/' + encodeURIComponent(name), { method: 'DELETE' });
+                showToast('删除成功', 'ok');
+                _currentStore = null;
+                await loadStores();
+                renderStoreDetail();
+            } catch (e) {
+                showToast('删除失败: ' + e.message, 'err');
+            }
+        }
+
+        // ============================================================
+        // Upsert Tab
+        // ============================================================
+        async function renderUpsertTab() {
+            const isReadOnly = _nodeInfo.role === 'replica';
+            const names = await api('/stores').catch(() => []);
+            const currentName = _currentStore ? _currentStore.storeName : (names[0] || '');
+            if (currentName && (!_currentStore || _currentStore.storeName !== currentName)) {
+                _currentStore = { storeName: currentName };
+            }
+            $('leftPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">选 Store</div>
+                    <select id="upsertStoreSelect" style="width:100%;" onchange="_currentStore={storeName:this.value};">
+                        ${(names || []).map(n => `<option value="${escapeHtml(n)}" ${n === currentName ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+                    </select>
+                </div>
+            `;
+            $('rightPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">写入文档 ${isReadOnly ? '<span style="color:#dc2626;">[replica 只读]</span>' : ''}</div>
+                    <div class="form-row"><label>ID</label><input id="docId" value="doc-1"></div>
+                    <div class="form-row vertical">
+                        <label>Text（自动 embed）</label>
+                        <textarea id="docText" rows="3">VecLite 是个 Java 轻量级向量库</textarea>
+                    </div>
+                    <div class="form-row vertical">
+                        <label>Metadata (JSON)</label>
+                        <textarea id="docMeta" rows="2">{"category":"test","tag":"demo"}</textarea>
+                    </div>
+                    <button onclick="doUpsert()" ${isReadOnly || !_currentStore ? 'disabled' : ''}>💾 Upsert</button>
+                    <span id="upsertMsg" style="margin-left:8px;font-size:12px;"></span>
+                </div>
+                <div class="section">
+                    <div class="section-title">💾 落盘信息（异步链路）</div>
+                    <div class="storage-info">
+                        <h4>upsert 触发的 4 角色写入</h4>
+                        <div class="item">
+                            <div class="k">1. 内存:</div>
+                            <div class="v">LocalVectorStore.upsert() 同步写 IdOffsetIndex / OffHeapSQ8Buffer</div>
+                        </div>
+                        <div class="item">
+                            <div class="k">2. 磁盘:</div>
+                            <div class="v">PayloadStorage.put() 同步落本地 mmap（MMapPayloadStorage 模式）</div>
+                        </div>
+                        <div class="item">
+                            <div class="k">3. OSS:</div>
+                            <div class="v">⚠️ 30s 后由 FlushScheduler 触发 saveStore 推 OSS</div>
+                        </div>
+                        <div class="item">
+                            <div class="k">4. PG:</div>
+                            <div class="v">⚠️ OSS 成功后才写 latestSnapshotVersion 指针</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        async function doUpsert() {
+            if (!_currentStore) { showToast('请先选 Store', 'err'); return; }
+            const id = $('docId').value.trim();
+            const text = $('docText').value;
+            let meta;
+            try { meta = JSON.parse($('docMeta').value || '{}'); }
+            catch (e) { showToast('Metadata 不是合法 JSON', 'err'); return; }
+            try {
+                await api('/stores/' + encodeURIComponent(_currentStore.storeName) + '/documents', {
+                    method: 'POST',
+                    body: JSON.stringify({ id, text, metadata: meta }),
+                });
+                $('upsertMsg').innerHTML = '<span style="color:#059669;">✅ 写成功，等 30s 定时刷盘看 OSS / PG</span>';
+                showToast('Upsert 成功', 'ok');
+            } catch (e) {
+                $('upsertMsg').innerHTML = '<span style="color:#dc2626;">❌ ' + e.message + '</span>';
+                showToast('Upsert 失败: ' + e.message, 'err');
+            }
+        }
+
+        // ============================================================
+        // Search Tab
+        // ============================================================
+        async function renderSearchTab() {
+            const names = await api('/stores').catch(() => []);
+            const currentName = _currentStore ? _currentStore.storeName : (names[0] || '');
+            if (currentName && (!_currentStore || _currentStore.storeName !== currentName)) {
+                _currentStore = { storeName: currentName };
+            }
+            $('leftPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">选 Store</div>
+                    <select id="searchStoreSelect" style="width:100%;" onchange="_currentStore={storeName:this.value};">
+                        ${(names || []).map(n => `<option value="${escapeHtml(n)}" ${n === currentName ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+                    </select>
+                </div>
+            `;
+            $('rightPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">检索（按文本，自动 embed）</div>
+                    <div class="form-row"><label>查询</label><input id="qText" value="什么是 VecLite"></div>
+                    <div class="form-row"><label>TopK</label><input id="qK" type="number" value="5" min="1" max="50"></div>
+                    <button onclick="doSearch()" ${!_currentStore ? 'disabled' : ''}>🔍 Search</button>
+                    <span id="qMsg" style="margin-left:8px;font-size:12px;color:#6b7280;"></span>
+                </div>
+                <div class="section">
+                    <div class="section-title">检索结果</div>
+                    <div id="searchResults"></div>
+                </div>
+            `;
+        }
+        async function doSearch() {
+            if (!_currentStore) return;
+            const q = $('qText').value;
+            const k = parseInt($('qK').value);
+            const t0 = performance.now();
+            $('qMsg').textContent = '检索中...';
+            try {
+                const req = { queryText: q, topK: k, storeName: _currentStore.storeName };
+                const results = await api('/stores/' + encodeURIComponent(_currentStore.storeName) + '/search/text', {
+                    method: 'POST', body: JSON.stringify(req),
+                });
+                const ms = Math.round(performance.now() - t0);
+                _searchLatency = ms;
+                $('qMsg').textContent = '耗时 ' + ms + 'ms';
+                const el = $('searchResults');
+                if (!results || results.length === 0) { el.innerHTML = '<div class="empty">无结果</div>'; return; }
+                el.innerHTML = results.map((r, i) => `
+                    <div class="search-result">
+                        <div class="top">
+                            <span><span class="rank-tag">#${i+1}</span> ${escapeHtml(r.id || '')}</span>
+                            <span class="score">${(r.score || 0).toFixed(4)}</span>
+                        </div>
+                        <div class="text">${escapeHtml((r.text || r.payload?.text || '').slice(0, 200))}</div>
+                        <div class="meta">${escapeHtml(JSON.stringify(r.metadata || r.payload?.metadata || {}))}</div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                $('qMsg').innerHTML = '<span style="color:#dc2626;">' + e.message + '</span>';
+            }
+        }
+
+        // ============================================================
+        // Documents Tab
+        // ============================================================
+        async function renderDocsTab() {
+            const names = await api('/stores').catch(() => []);
+            const currentName = _currentStore ? _currentStore.storeName : (names[0] || '');
+            if (currentName && (!_currentStore || _currentStore.storeName !== currentName)) {
+                _currentStore = { storeName: currentName };
+            }
+            $('leftPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">选 Store</div>
+                    <select id="docsStoreSelect" style="width:100%;" onchange="_currentStore={storeName:this.value};loadDocs();">
+                        ${(names || []).map(n => `<option value="${escapeHtml(n)}" ${n === currentName ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+                    </select>
+                </div>
+            `;
+            $('rightPanel').innerHTML = `
+                <div class="section">
+                    <div class="section-title">文档列表（分页）</div>
+                    <div class="form-row">
+                        <label>每页</label>
+                        <input id="dps" type="number" value="20" min="5" max="100" style="width:80px;">
+                        <button onclick="_docsPageSize=parseInt($('dps').value);loadDocs();">应用</button>
+                        <button class="secondary" onclick="loadDocs()">🔄 刷新</button>
+                    </div>
+                    <div id="docsTable"></div>
+                    <div id="docsPager" class="pagination"></div>
+                </div>
+            `;
+            await loadDocs();
+        }
+        async function loadDocs() {
+            if (!_currentStore) { $('docsTable').innerHTML = '<div class="empty">请选 Store</div>'; return; }
+            try {
+                const page = await api('/stores/' + encodeURIComponent(_currentStore.storeName) + '/documents?page=' + _docsPage + '&size=' + _docsPageSize);
+                _docsData = page.items || page.documents || page.content || [];
+                _docsTotal = page.totalElements || page.total || _docsData.length;
+                renderDocsTable();
+            } catch (e) {
+                $('docsTable').innerHTML = '<div class="empty">' + e.message + '</div>';
+            }
+        }
+        function renderDocsTable() {
+            const el = $('docsTable');
+            if (_docsData.length === 0) { el.innerHTML = '<div class="empty">无数据</div>'; return; }
+            el.innerHTML = `<table class="docs-table">
+                <thead><tr><th>ID</th><th>Text</th><th>Metadata</th></tr></thead>
+                <tbody>${_docsData.map(d => `<tr>
+                    <td>${escapeHtml(d.id || '')}</td>
+                    <td>${escapeHtml((d.text || '').slice(0, 80))}</td>
+                    <td>${escapeHtml(JSON.stringify(d.metadata || {}))}</td>
+                </tr>`).join('')}</tbody></table>`;
+            const pages = Math.ceil(_docsTotal / _docsPageSize) || 1;
+            $('docsPager').innerHTML = `
+                <span>共 ${_docsTotal} 条</span>
+                <span class="pages">
+                    ${Array.from({length: pages}, (_, i) => `<button class="${i === _docsPage ? 'active' : ''}" onclick="_docsPage=${i};loadDocs();">${i+1}</button>`).join('')}
+                </span>
+            `;
+        }
+
+        // ============================================================
+        // 启动
+        // ============================================================
+        async function testConnection() {
+            try {
+                await api('/stores');
+                $('connectionStatus').innerHTML = '<span class="ok">✅ 已连接</span>';
+                await refreshNodeInfo();
+            } catch (e) {
+                $('connectionStatus').innerHTML = '<span class="err">❌ ' + e.message + '</span>';
+            }
+        }
+        window.addEventListener('DOMContentLoaded', () => {
+            renderTab();
+            renderNodeBar();
+            renderClusterTopo();
+            testConnection();
+        });
+    </script>
+</body>
+</html>

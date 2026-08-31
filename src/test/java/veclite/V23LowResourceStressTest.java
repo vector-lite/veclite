@@ -59,7 +59,7 @@ public class V23LowResourceStressTest {
             properties.getStorage().getSnapshotFile().setBasePath(basePath);
 
             LocalVectorEngine engine = new LocalVectorEngine(properties);
-            VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, new NoopVectorPersistenceStorage(), properties);
+            VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, new NoopVectorPersistenceStorage(), properties, null);
 
             String storeName = "store_1c1g_" + datasetSize;
             VectorStoreDefinition definition = new VectorStoreDefinition();

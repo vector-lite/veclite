@@ -31,8 +31,13 @@ dependencies {
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
 
     implementation("com.fasterxml.jackson.core:jackson-databind")
+    // v2.5 MongoDB 单一真相源持久化（StorageType.MONGODB），版本由 Spring Boot BOM 管理
+    implementation("org.mongodb:mongodb-driver-sync")
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springdoc:springdoc-openapi-ui:1.7.0")
+    // v2.5 PostgreSQL 单一真相源持久化（StorageType.POSTGRES），版本由 Spring Boot BOM 管理
+    implementation("org.postgresql:postgresql:42.7.3")
+    implementation("org.springframework.boot:spring-boot-starter-jdbc")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
@@ -90,6 +95,16 @@ tasks.register<Test>("accuracyTest") {
         includeTags("accuracy")
     }
     minHeapSize = "1g"
+    maxHeapSize = "2g"
+}
+
+tasks.register<Test>("manualTest") {
+    description = "运行依赖外部服务的联调测试（@Tag(\"manual\")），如 MongoDB 持久化端到端（需本地 local-mongo）。"
+    group = "verification"
+    useJUnitPlatform {
+        includeTags("manual")
+    }
+    minHeapSize = "512m"
     maxHeapSize = "2g"
 }
 

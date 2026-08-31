@@ -72,7 +72,7 @@ class V24ResourcePerformanceBenchmarkTest {
 
         String storeName = "benchmark";
         LocalVectorEngine engine = new LocalVectorEngine(properties);
-        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, null, properties);
+        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, null, properties, null);
         VectorStoreDefinition definition = new VectorStoreDefinition();
         definition.setStoreName(storeName);
         definition.setDimension(DIMENSION);

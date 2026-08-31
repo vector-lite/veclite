@@ -70,7 +70,7 @@ public class AccuracyTest {
         // 2. 初始化 Veclite Store
         VectorLiteProperties properties = new VectorLiteProperties();
         LocalVectorEngine engine = new LocalVectorEngine();
-        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, new NoopVectorPersistenceStorage(), properties);
+        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, new NoopVectorPersistenceStorage(), properties, null);
 
         String[] metrics = new String[]{"COSINE", "DOT_PRODUCT", "EUCLIDEAN"};
 

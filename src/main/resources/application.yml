@@ -6,25 +6,34 @@ veclite:
   web:
     enabled: true
     base-path: /veclite/api/v1
-  # Embedding 接口管理：模型名称 + 版本是绑定 Store 的重要参数（绑定后不可变）
-  embedding:
-    default-model: text-embedding-demo
-    models:
-      text-embedding-demo:
-        name: text-embedding-demo
-        version: "1"
-        provider: http
-        url: http://localhost:9000/api/embed
-        timeout-millis: 3000
-        batch-size: 16
+  # Embedding 数据源已改为数据库维护：通过数据源管理页或 /embedding/models 接口增删改查
   storage:
-    type: SNAPSHOT_FILE
-    snapshot-file:
+    # 持久化后端全局开关：NOOP | SNAPSHOT_FILE | MONGODB | POSTGRES
+    type: MONGODB
+    mongodb:                  # type=MONGODB 时生效
+      uri: mongodb://localhost:27017/veclite
+      database: veclite
+      document-collection: veclite_document
+      meta-collection: veclite_store_meta
+      scan-batch-size: 1000
+    postgres:                 # type=POSTGRES 时生效（建表见 src/main/resources/schema/veclite_postgres.sql）
+      jdbc-url: jdbc:postgresql://localhost:5432/veclite
+      username: ${POSTGRES_USER:veclite}
+      password: ${POSTGRES_PASSWORD:veclite}
+      document-table: veclite_document
+      meta-table: veclite_store_meta
+      embedding-model-table: veclite_embedding_model
+      fetch-size: 1000
+    snapshot-file:            # type=SNAPSHOT_FILE 时生效
       base-path: ./data/vector-lite
       flush-interval-seconds: 30
       flush-on-shutdown: true
     payload:
       mode: MEMORY
+  # 落盘前是否强制校验 vec / payload / idIndex 三者 size 一致；
+  # true 时校验失败直接抛 ConsistencyException 阻止落盘，false 时跳过校验（默认）
+  consistency:
+    strict: false
 
 springdoc:
   api-docs:

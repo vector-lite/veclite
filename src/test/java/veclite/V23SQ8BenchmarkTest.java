@@ -49,7 +49,7 @@ public class V23SQ8BenchmarkTest {
 
         LocalVectorEngine engine = new LocalVectorEngine(properties);
         VectorPersistenceStorage storage = new SnapshotFileStorage(properties);
-        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, storage, properties);
+        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, storage, properties, null);
 
         runGC();
         long baselineMemory = getUsedMemoryMB();

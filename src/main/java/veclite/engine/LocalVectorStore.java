@@ -617,14 +617,18 @@ public class LocalVectorStore {
         return new DeleteResult(count);
     }
 
-    public synchronized DeleteResult deleteByFilter(FilterExpression filter) {
+    /**
+     * 求值元数据过滤条件，返回当前有效且命中的文档 ID（不做任何删除）。
+     * 供文档型持久化的写透删除（deleteByFilter 场景先取 ID 再删真相源）使用，
+     * 匹配语义与 {@link #deleteByFilter(FilterExpression)} 完全一致。
+     */
+    public synchronized List<String> findIdsByFilter(FilterExpression filter) {
         if (filter == null) {
-            return new DeleteResult(0);
+            return new ArrayList<>();
         }
-        int count = 0;
+        List<String> matchedIds = new ArrayList<>();
         int totalCount = getVectorBufferSize();
         BitSet matchingBitSet = metadataFilterIndex.evaluate(filter);
-
         for (int offset = 0; offset < totalCount; offset++) {
             if (deletedBitSet.isDeleted(offset)) {
                 continue;
@@ -636,11 +640,19 @@ public class LocalVectorStore {
             if (matchingBitSet == null && !matchesFilter(metadata, filter)) {
                 continue;
             }
-            deletedBitSet.markDeleted(offset);
-            metadataFilterIndex.removeDocument(offset, metadata);
-            count++;
+            DocumentPayload payload = payloadStorage.get(offset);
+            if (payload != null) {
+                matchedIds.add(payload.getId());
+            }
         }
-        return new DeleteResult(count);
+        return matchedIds;
+    }
+
+    public synchronized DeleteResult deleteByFilter(FilterExpression filter) {
+        if (filter == null) {
+            return new DeleteResult(0);
+        }
+        return deleteByIds(findIdsByFilter(filter));
     }
 
     public VectorStoreStats getStats() {
@@ -651,7 +663,34 @@ public class LocalVectorStore {
         stats.setMaxCapacity(definition.getMaxCapacity());
         stats.setMetric(definition.getMetric());
         stats.setQuantization(definition.getQuantization());
+        stats.setEmbeddingModel(definition.getEmbeddingModel());
         return stats;
+    }
+
+    /**
+     * 按 ID 精确查询单个文档（含文本与元数据），用于管理与调试界面。
+     *
+     * @param includeVector 是否回填原始向量；为 false 时返回的文档 vector 为 null
+     * @return 文档不存在或已删除时返回 null
+     */
+    public synchronized VectorDocument getDocument(String id, boolean includeVector) {
+        if (id == null) {
+            return null;
+        }
+        Integer offset = idOffsetIndex.getOffset(id);
+        if (offset == null || isOffsetDeleted(offset)) {
+            return null;
+        }
+        DocumentPayload payload = getDocumentPayloadAt(offset);
+        if (payload == null) {
+            return null;
+        }
+        float[] vector = null;
+        if (includeVector) {
+            vector = new float[definition.getDimension()];
+            copyVectorFromBuffer(offset, vector);
+        }
+        return new VectorDocument(payload.getId(), vector, payload.getText(), payload.getMetadata());
     }
 
     public synchronized List<VectorDocument> listDocuments(int page, int size, boolean includeVector) {
@@ -715,6 +754,22 @@ public class LocalVectorStore {
             return vectorBuffer != null ? vectorBuffer.getSize() : 0;
         }
         return sq8Frozen ? sq8Size : calibrationCount;
+    }
+
+    /**
+     * v2.4 兼容：payload 与 vector 共用同一 buffer 的同号位置，
+     * 因此其 size 与 {@link #getVectorBufferSize()} 相等。
+     */
+    public int getPayloadSize() {
+        return getVectorBufferSize();
+    }
+
+    /**
+     * v2.4 兼容：id 索引按 buffer 顺序写入，
+     * 因此其 size 与 {@link #getVectorBufferSize()} 相等。
+     */
+    public int getIdIndexSize() {
+        return getVectorBufferSize();
     }
 
     public boolean isOffsetDeleted(int offset) {

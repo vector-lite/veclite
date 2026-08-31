@@ -89,7 +89,10 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
     public List<VectorLiteProperties.ModelConfig> loadAll() {
         List<VectorLiteProperties.ModelConfig> result = new ArrayList<>();
         for (Document doc : collection.find()) {
-            if (DEFAULT_MARKER_ID.equals(doc.getString("_id"))) {
+            // 默认标记文档的 _id 是字符串 "__default__"，普通模型文档的 _id 是 Mongo 自动生成的 ObjectId。
+            // 必须按类型判断后再比较，直接 getString("_id") 遇 ObjectId 会抛 ClassCastException。
+            Object id = doc.get("_id");
+            if (id instanceof String marker && DEFAULT_MARKER_ID.equals(marker)) {
                 continue;
             }
             VectorLiteProperties.ModelConfig config = new VectorLiteProperties.ModelConfig();

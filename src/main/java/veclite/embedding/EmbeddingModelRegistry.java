@@ -2,6 +2,8 @@ package veclite.embedding;
 
 
 import veclite.config.VectorLiteProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -25,6 +27,8 @@ import java.util.Set;
  * </ul>
  */
 public class EmbeddingModelRegistry {
+
+    private static final Logger log = LoggerFactory.getLogger(EmbeddingModelRegistry.class);
 
     /** 支持的 provider 协议，与 {@link EmbeddingHttpAdapter#forProvider} 保持一致 */
     public static final Set<String> SUPPORTED_PROVIDERS = Set.of("http", "openai", "ollama", "ollama-embed");
@@ -55,8 +59,11 @@ public class EmbeddingModelRegistry {
                 }
             }
             managedDefault = store.loadDefault();
-        } catch (Exception ignored) {
-            // 持久化端口不可用时保持空覆盖层，yml 配置仍然生效
+        } catch (Exception e) {
+            // 持久化端口不可用时保持空覆盖层，yml 配置仍然生效；但必须把异常暴露出来，
+            // 否则数据源加载失败会被静默吞掉（曾因此出现"重启后所有库失联"的难排查故障）。
+            log.warn("Failed to load managed embedding models from persistence store, "
+                    + "falling back to empty registry: {}", e.toString());
         }
     }
 

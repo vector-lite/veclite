@@ -149,7 +149,7 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
         String sql = "INSERT INTO \"" + table + "\" ("
                 + FIELD_DOC_ID + ", " + FIELD_DOC_TEXT + ", " + FIELD_METADATA + ", "
                 + FIELD_VECTOR + ", " + FIELD_UPDATED_AT + ") "
-                + "VALUES (?, ?::jsonb, ?, ?, ?) "
+                + "VALUES (?, ?, ?::jsonb, ?, ?) "
                 + "ON CONFLICT (" + FIELD_DOC_ID + ") DO UPDATE SET "
                 + FIELD_DOC_TEXT + "=EXCLUDED." + FIELD_DOC_TEXT + ", "
                 + FIELD_METADATA + "=EXCLUDED." + FIELD_METADATA + ", "

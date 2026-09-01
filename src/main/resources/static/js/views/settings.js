@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { el, toast, formModal, confirmModal, escapeHtml, truncate } from '../ui.js';
+import { el, toast, formModal, confirmModal, openModal, escapeHtml, truncate } from '../ui.js';
 import { icons, emptyStates } from '../icons.js';
 
 /** provider 协议选项，与后端 EmbeddingModelRegistry.SUPPORTED_PROVIDERS 一致 */
@@ -60,7 +60,7 @@ export async function renderSettings(container) {
     body.innerHTML = `
       <div class="table-wrap">
         <table class="table">
-          <thead><tr><th>模型</th><th>版本</th><th>Provider</th><th>URL</th><th>鉴权</th><th>维度</th><th>超时</th><th>批量</th><th style="width:110px"></th></tr></thead>
+          <thead><tr><th>模型</th><th>版本</th><th>Provider</th><th>URL</th><th>鉴权</th><th>维度</th><th>超时</th><th>批量</th><th style="width:170px"></th></tr></thead>
           <tbody>
             ${models.map((m) => `
               <tr>
@@ -75,6 +75,7 @@ export async function renderSettings(container) {
                 <td class="mono cell-muted">${m.timeoutMillis}ms</td>
                 <td class="mono cell-muted">${m.batchSize}</td>
                 <td style="text-align:right;white-space:nowrap">
+                  <button class="btn btn-sm" data-embed="${escapeHtml(m.name)}" data-version="${escapeHtml(m.version || '')}">试算</button>
                   <button class="btn btn-sm" data-edit="${escapeHtml(m.name)}" data-version="${escapeHtml(m.version || '')}">编辑</button>
                   <button class="btn btn-sm btn-danger" data-delete="${escapeHtml(m.name)}" data-version="${escapeHtml(m.version || '')}">删除</button>
                 </td>
@@ -83,6 +84,12 @@ export async function renderSettings(container) {
         </table>
       </div>`;
 
+    body.querySelectorAll('[data-embed]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const model = models.find((m) => m.name === btn.dataset.embed && (m.version || '') === (btn.dataset.version || ''));
+        if (model) embedDialog(model);
+      });
+    });
     body.querySelectorAll('[data-edit]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const model = models.find((m) => m.name === btn.dataset.edit && (m.version || '') === (btn.dataset.version || ''));
@@ -100,6 +107,98 @@ export async function renderSettings(container) {
           draw();
         } catch (e) { toast(e.message, true); }
       });
+    });
+  }
+
+  /**
+   * 向量化试算弹窗：与指定数据源（名称+版本）绑定，输入文本返回向量。
+   * 结果以卡片展示（维度 / 耗时徽标 + 等宽向量内容 + 展开与复制），Ctrl+Enter 快捷触发。
+   */
+  function embedDialog(model) {
+    const content = el(`
+      <div>
+        <label class="field">
+          <span>输入文本</span>
+          <textarea class="input input-full" rows="4" data-role="text" placeholder="输入需要向量化的文本，例如：今天天气不错"></textarea>
+        </label>
+        <div style="display:flex;align-items:center;gap:12px;margin:14px 0 2px">
+          <button class="btn btn-primary" data-role="run">生成向量</button>
+          <span class="cell-muted" style="font-size:12px" data-role="meta"></span>
+        </div>
+        <div data-role="result" style="margin-top:14px"></div>
+      </div>
+    `);
+
+    const textInput = content.querySelector('[data-role=text]');
+    const runBtn = content.querySelector('[data-role=run]');
+    const meta = content.querySelector('[data-role=meta]');
+    const result = content.querySelector('[data-role=result]');
+
+    let lastVector = null;
+    let lastElapsed = 0;
+
+    const renderVector = (vector, expanded) => {
+      result.innerHTML = '';
+      if (!vector.length) {
+        result.appendChild(el('<div class="cell-muted" style="font-size:12px">服务端返回空向量</div>'));
+        return;
+      }
+      const previewLimit = expanded ? vector.length : Math.min(8, vector.length);
+      const preview = vector.slice(0, previewLimit)
+        .map((v) => (typeof v === 'number' ? Number(v.toFixed(6)) : v)).join(', ');
+      const box = el(`
+        <div style="border:1px solid var(--border-muted);border-radius:6px;background:var(--bg-subtle);padding:12px 14px">
+          <div style="display:flex;gap:6px;margin-bottom:10px">
+            <span class="pill pill-success">维度 ${vector.length}</span>
+            <span class="pill">耗时 ${lastElapsed}ms</span>
+          </div>
+          <div class="mono" style="color:var(--fg);word-break:break-all;line-height:1.7;white-space:pre-wrap;${expanded ? 'max-height:240px;overflow-y:auto;' : ''}">[${escapeHtml(preview)}${vector.length > previewLimit ? ', …' : ''}]</div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            ${vector.length > 8 ? `<button class="btn btn-sm" data-role="toggle">${expanded ? '收起' : `展开全部 ${vector.length} 维`}</button>` : ''}
+            <button class="btn btn-sm" data-role="copy">复制 JSON</button>
+          </div>
+        </div>`);
+      const toggle = box.querySelector('[data-role=toggle]');
+      if (toggle) toggle.addEventListener('click', () => renderVector(lastVector, !expanded));
+      box.querySelector('[data-role=copy]').addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(JSON.stringify(lastVector));
+          toast('向量已复制到剪贴板');
+        } catch { toast('复制失败，请手动选择', true); }
+      });
+      result.appendChild(box);
+    };
+
+    const run = async () => {
+      const text = textInput.value.trim();
+      if (!text) { toast('请输入文本', true); textInput.focus(); return; }
+      runBtn.disabled = true;
+      meta.textContent = '向量化中…';
+      const startTs = performance.now();
+      try {
+        const res = await api.embedText(model.name, model.version, text);
+        lastVector = Array.isArray(res.vector) ? res.vector : [];
+        lastElapsed = Math.max(1, Math.round(performance.now() - startTs));
+        meta.textContent = '';
+        renderVector(lastVector, false);
+      } catch (e) {
+        meta.textContent = '';
+        result.innerHTML = '';
+        result.appendChild(el(`<div style="font-size:12px;color:var(--danger);padding:10px 12px;border:1px solid rgba(207,34,46,.3);border-radius:6px;background:rgba(207,34,46,.04)">${escapeHtml(e.message)}</div>`));
+      } finally {
+        runBtn.disabled = false;
+      }
+    };
+
+    runBtn.addEventListener('click', run);
+    textInput.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run();
+    });
+
+    openModal({
+      title: `向量化试算 — ${model.name}${model.version ? ` v${model.version}` : ''}`,
+      content,
+      footer: [{ label: '关闭' }],
     });
   }
 

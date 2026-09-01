@@ -71,6 +71,21 @@ public class VectorLiteDebugController {
         return success();
     }
 
+    @Operation(summary = "Embed a single text with the specified embedding data source")
+    @PostMapping("/embedding/models/{name}/embed")
+    public EmbedVectorResult embedText(
+            @Parameter(description = "Model name") @PathVariable String name,
+            @Parameter(description = "Model version; omitted resolves to the primary version of the name")
+            @RequestParam(required = false) String version,
+            @RequestBody EmbedTextRequest request) {
+        if (request == null || request.getText() == null || request.getText().isBlank()) {
+            throw new IllegalArgumentException("Text to embed must not be blank");
+        }
+        List<Float> vector = embeddingService.embed(name, version, request.getText(), request.getDimension());
+        return new EmbedVectorResult(name, embeddingService.resolveVersion(name, version),
+                vector != null ? vector.size() : 0, vector);
+    }
+
     private VectorLiteProperties.ModelConfig toModelConfig(EmbeddingModelInfo model) {
         if (model == null || model.getName() == null || model.getName().isBlank()) {
             throw new IllegalArgumentException("Embedding model name is required");

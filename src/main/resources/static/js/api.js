@@ -42,4 +42,7 @@ export const api = {
     del(`/embedding/models/${encodeURIComponent(name)}?version=${encodeURIComponent(version || '')}`),
   setDefaultEmbeddingModel: (name, version) =>
     post(`/embedding/models/${encodeURIComponent(name)}/default?version=${encodeURIComponent(version || '')}`),
+  embedText: (name, version, text, dimension = 0) =>
+    post(`/embedding/models/${encodeURIComponent(name)}/embed?version=${encodeURIComponent(version || '')}`,
+      { text, dimension }),
 };

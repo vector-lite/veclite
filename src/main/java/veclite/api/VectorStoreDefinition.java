@@ -36,8 +36,8 @@ public class VectorStoreDefinition implements Serializable {
     private List<String> indexedMetadataFields = new ArrayList<>();
 
     /**
-     * v2.4 持久化：最新一次成功刷盘到远端（OSS）时生成的快照版本号。
-     * SNAPSHOT_FILE 模式下不写，可为 null。
+     * 历史快照版本字段，保留用于反序列化旧数据。
+     * 数据库写透模式下不参与一致性判断，可为 {@code null}。
      */
     private String snapshotVersion;
 

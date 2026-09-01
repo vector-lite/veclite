@@ -5,6 +5,7 @@ import veclite.api.VectorStoreManager;
 import veclite.config.VectorLiteProperties;
 import veclite.embedding.EmbeddingService;
 import veclite.model.VectorStoreStats;
+import veclite.persistence.StoreNameValidator;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,6 +46,7 @@ public class LocalVectorEngine implements VectorStoreManager {
         if (storeName == null || definition == null) {
             throw new IllegalArgumentException("Store name and definition must not be null");
         }
+        StoreNameValidator.validate(storeName);
         definition.setStoreName(storeName);
 
         stores.compute(storeName, (name, existing) -> {

@@ -11,6 +11,9 @@ import veclite.model.StorageType;
 import veclite.persistence.VectorDocumentEntity;
 import veclite.persistence.VectorDocumentRepository;
 import veclite.persistence.VectorStorageFormat;
+import veclite.persistence.StoreNameValidator;
+import veclite.persistence.StorePersistenceHandle;
+import veclite.persistence.VectorStorageFormat;
 
 import javax.sql.DataSource;
 import java.sql.Timestamp;
@@ -43,9 +46,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
     private static final String FIELD_DOC_TEXT = "doc_text";
     private static final String FIELD_METADATA = "metadata";
     private static final String FIELD_VECTOR = "vector";
-    private static final String FIELD_VECTOR_FORMAT = "vector_format";
-    private static final String FIELD_VECTOR_DIM = "vector_dim";
-    private static final String FIELD_EMBEDDING_MODEL = "embedding_model";
     private static final String FIELD_UPDATED_AT = "updated_at";
 
     private static final String META_DIMENSION = "dimension";
@@ -66,7 +66,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final String documentTable;
     private final String metaTable;
     private final int fetchSize;
 
@@ -77,7 +76,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
     public PostgresVectorDocumentRepository(VectorLiteProperties properties, DataSource dataSource) {
         VectorLiteProperties.PostgresConfig config = properties.getStorage().getPostgres();
         this.jdbc = new JdbcTemplate(dataSource);
-        this.documentTable = config.getDocumentTable();
         this.metaTable = config.getMetaTable();
         this.fetchSize = config.getFetchSize() > 0 ? config.getFetchSize() : 1000;
         ensureSchema();
@@ -98,18 +96,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
 
     @Override
     public void ensureSchema() {
-        jdbc.execute("CREATE TABLE IF NOT EXISTS " + documentTable + " ("
-                + FIELD_STORE_NAME + "      VARCHAR(128) NOT NULL, "
-                + FIELD_DOC_ID + "          VARCHAR(256) NOT NULL, "
-                + FIELD_DOC_TEXT + "        TEXT, "
-                + FIELD_METADATA + "        JSONB, "
-                + FIELD_VECTOR_FORMAT + "   VARCHAR(16) NOT NULL, "
-                + FIELD_VECTOR + "          BYTEA, "
-                + FIELD_VECTOR_DIM + "      INT NOT NULL, "
-                + FIELD_EMBEDDING_MODEL + " VARCHAR(128), "
-                + FIELD_UPDATED_AT + "      TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, "
-                + "PRIMARY KEY (" + FIELD_STORE_NAME + ", " + FIELD_DOC_ID + "))");
-
         jdbc.execute("CREATE TABLE IF NOT EXISTS " + metaTable + " ("
                 + FIELD_STORE_NAME + "              VARCHAR(128) PRIMARY KEY, "
                 + META_DIMENSION + "                INT NOT NULL, "
@@ -128,35 +114,55 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
     }
 
     @Override
+    public StorePersistenceHandle ensureStore(String storeName) {
+        StoreNameValidator.validate(storeName);
+        String table = storeName;
+        jdbc.execute("CREATE TABLE IF NOT EXISTS \"" + table + "\" ("
+                + FIELD_DOC_ID + "          VARCHAR(256) NOT NULL, "
+                + FIELD_DOC_TEXT + "        TEXT, "
+                + FIELD_METADATA + "        JSONB, "
+                + FIELD_VECTOR + "          BYTEA, "
+                + FIELD_UPDATED_AT + "      TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, "
+                + "PRIMARY KEY (" + FIELD_DOC_ID + "))");
+        return new StorePersistenceHandle(storeName, table);
+    }
+
+    @Override
+    public StorePersistenceHandle handle(String storeName) {
+        StoreNameValidator.validate(storeName);
+        return new StorePersistenceHandle(storeName, storeName);
+    }
+
+    @Override
+    public void dropStore(String storeName) {
+        StoreNameValidator.validate(storeName);
+        jdbc.execute("DROP TABLE IF EXISTS \"" + storeName + "\"");
+        deleteStoreMetadata(storeName);
+    }
+
+    @Override
     public void upsertBatch(String storeName, List<VectorDocumentEntity> entities) {
         if (entities == null || entities.isEmpty()) {
             return;
         }
-        String sql = "INSERT INTO " + documentTable + " ("
-                + FIELD_STORE_NAME + ", " + FIELD_DOC_ID + ", " + FIELD_DOC_TEXT + ", " + FIELD_METADATA + ", "
-                + FIELD_VECTOR_FORMAT + ", " + FIELD_VECTOR + ", " + FIELD_VECTOR_DIM + ", "
-                + FIELD_EMBEDDING_MODEL + ", " + FIELD_UPDATED_AT + ") "
-                + "VALUES (?,?,?,?::jsonb,?,?,?,?,?) "
-                + "ON CONFLICT (" + FIELD_STORE_NAME + ", " + FIELD_DOC_ID + ") DO UPDATE SET "
+        String table = ensureStore(storeName).physicalName();
+        String sql = "INSERT INTO \"" + table + "\" ("
+                + FIELD_DOC_ID + ", " + FIELD_DOC_TEXT + ", " + FIELD_METADATA + ", "
+                + FIELD_VECTOR + ", " + FIELD_UPDATED_AT + ") "
+                + "VALUES (?, ?::jsonb, ?, ?, ?) "
+                + "ON CONFLICT (" + FIELD_DOC_ID + ") DO UPDATE SET "
                 + FIELD_DOC_TEXT + "=EXCLUDED." + FIELD_DOC_TEXT + ", "
                 + FIELD_METADATA + "=EXCLUDED." + FIELD_METADATA + ", "
-                + FIELD_VECTOR_FORMAT + "=EXCLUDED." + FIELD_VECTOR_FORMAT + ", "
                 + FIELD_VECTOR + "=EXCLUDED." + FIELD_VECTOR + ", "
-                + FIELD_VECTOR_DIM + "=EXCLUDED." + FIELD_VECTOR_DIM + ", "
-                + FIELD_EMBEDDING_MODEL + "=EXCLUDED." + FIELD_EMBEDDING_MODEL + ", "
                 + FIELD_UPDATED_AT + "=CURRENT_TIMESTAMP";
 
         List<Object[]> batch = new ArrayList<>(entities.size());
         for (VectorDocumentEntity entity : entities) {
             batch.add(new Object[]{
-                    storeName,
                     entity.getDocId(),
                     entity.getText(),
                     toJson(entity.getMetadata()),
-                    entity.getFormat().name(),
                     toVectorBytes(entity),
-                    entity.getVectorDim(),
-                    entity.getEmbeddingModel(),
                     new Timestamp(System.currentTimeMillis())
             });
         }
@@ -174,34 +180,34 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
             List<String> chunk = documentIds.subList(from, to);
             String placeholders = String.join(",", Collections.nCopies(chunk.size(), "?"));
             Object[] args = new Object[chunk.size() + 1];
-            args[0] = storeName;
-            System.arraycopy(chunk.toArray(), 0, args, 1, chunk.size());
-            deleted += jdbc.update("DELETE FROM " + documentTable
-                    + " WHERE " + FIELD_STORE_NAME + " = ? AND " + FIELD_DOC_ID + " IN (" + placeholders + ")", args);
+            System.arraycopy(chunk.toArray(), 0, args, 0, chunk.size());
+            deleted += jdbc.update("DELETE FROM \"" + handle(storeName).physicalName()
+                    + "\" WHERE " + FIELD_DOC_ID + " IN (" + placeholders + ")", args);
         }
         return deleted;
     }
 
     @Override
     public long deleteAll(String storeName) {
-        return jdbc.update("DELETE FROM " + documentTable + " WHERE " + FIELD_STORE_NAME + " = ?", storeName);
+        return jdbc.update("DELETE FROM \"" + handle(storeName).physicalName() + "\"", new Object[0]);
     }
 
     @Override
     public Iterator<VectorDocumentEntity> scan(String storeName) {
-        return new DocumentIterator(storeName);
+        VectorStorageFormat format = VectorStorageFormat.FLOAT32;
+        return new DocumentIterator(storeName, format);
     }
 
     @Override
     public List<String> listDocumentIds(String storeName) {
-        return jdbc.queryForList("SELECT " + FIELD_DOC_ID + " FROM " + documentTable
-                + " WHERE " + FIELD_STORE_NAME + " = ?", String.class, storeName);
+        return jdbc.queryForList("SELECT " + FIELD_DOC_ID + " FROM \"" + handle(storeName).physicalName()
+                + "\"", String.class);
     }
 
     @Override
     public long count(String storeName) {
-        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM " + documentTable
-                + " WHERE " + FIELD_STORE_NAME + " = ?", Long.class, storeName);
+        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM \"" + handle(storeName).physicalName()
+                + "\"", Long.class);
         return count != null ? count : 0L;
     }
 
@@ -377,13 +383,15 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
     private final class DocumentIterator implements Iterator<VectorDocumentEntity> {
 
         private final String storeName;
+        private final VectorStorageFormat format;
         private List<VectorDocumentEntity> buffer = Collections.emptyList();
         private int cursor;
         private String lastDocId;
         private boolean exhausted;
 
-        private DocumentIterator(String storeName) {
+        private DocumentIterator(String storeName, VectorStorageFormat format) {
             this.storeName = storeName;
+            this.format = format;
         }
 
         @Override
@@ -409,36 +417,32 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
         private void fetchNextChunk() {
             StringBuilder sql = new StringBuilder("SELECT ")
                     .append(FIELD_DOC_ID).append(", ").append(FIELD_DOC_TEXT).append(", ")
-                    .append(FIELD_METADATA).append(", ").append(FIELD_VECTOR_FORMAT).append(", ")
-                    .append(FIELD_VECTOR).append(", ").append(FIELD_VECTOR_DIM).append(", ")
-                    .append(FIELD_EMBEDDING_MODEL).append(", ").append(FIELD_UPDATED_AT)
-                    .append(" FROM ").append(documentTable)
-                    .append(" WHERE ").append(FIELD_STORE_NAME).append(" = ?");
+                    .append(FIELD_METADATA).append(", ").append(FIELD_VECTOR).append(", ").append(FIELD_UPDATED_AT)
+                    .append(" FROM \"").append(handle(storeName).physicalName()).append("\"")
+                    .append(" WHERE 1=1");
             if (lastDocId != null) {
                 sql.append(" AND ").append(FIELD_DOC_ID).append(" > ?");
             }
             sql.append(" ORDER BY ").append(FIELD_DOC_ID).append(" LIMIT ?");
 
             Object[] args = lastDocId == null
-                    ? new Object[]{storeName, fetchSize}
-                    : new Object[]{storeName, lastDocId, fetchSize};
+                    ? new Object[]{fetchSize}
+                    : new Object[]{lastDocId, fetchSize};
 
             buffer = jdbc.query(sql.toString(), (rs, rowNum) -> {
                 VectorDocumentEntity entity = new VectorDocumentEntity();
                 entity.setDocId(rs.getString(FIELD_DOC_ID));
                 entity.setText(rs.getString(FIELD_DOC_TEXT));
                 entity.setMetadata(fromJsonMap(rs.getString(FIELD_METADATA)));
-                entity.setFormat(parseFormat(rs.getString(FIELD_VECTOR_FORMAT)));
                 byte[] vector = rs.getBytes(FIELD_VECTOR);
                 if (vector != null) {
-                    if (entity.getFormat() == VectorStorageFormat.SQ8) {
+                    entity.setFormat(format);
+                    if (format == VectorStorageFormat.SQ8) {
                         entity.setSq8Vector(vector);
                     } else {
                         entity.setVector(VectorDocumentEntity.decodeVector(vector));
                     }
                 }
-                entity.setVectorDim(rs.getInt(FIELD_VECTOR_DIM));
-                entity.setEmbeddingModel(rs.getString(FIELD_EMBEDDING_MODEL));
                 Timestamp updatedAt = rs.getTimestamp(FIELD_UPDATED_AT);
                 entity.setUpdatedAt(updatedAt != null ? updatedAt.toInstant() : null);
                 return entity;

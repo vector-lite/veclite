@@ -7,10 +7,16 @@ package veclite.model;
  */
 public enum StorageType {
 
-    /** 不做持久化，纯内存 */
+    /**
+     * @deprecated 仅为旧版 SDK 源码兼容保留。生产配置必须使用数据库后端。
+     */
+    @Deprecated
     NOOP,
 
-    /** 本地快照文件：手动或定时刷盘，见 {@code veclite.storage.snapshot-file} */
+    /**
+     * @deprecated 本地快照已退出生产路径，仅为读取旧配置和兼容旧测试保留。
+     */
+    @Deprecated
     SNAPSHOT_FILE,
 
     /** MongoDB 单一真相源：文档 text/metadata/向量写透落库（RPO=0），启动游标重建 */

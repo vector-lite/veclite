@@ -34,7 +34,7 @@ graph TB
         IDX["IdOffsetIndex<br/>IntLongIdIndex"]
         DBS["DeletedBitSet"]
         MFI["MetadataFilterIndex<br/>（倒排位图）"]
-        PS["CompactPayloadStorage<br/>MMapPayloadStorage"]
+        PS["CompactPayloadStorage<br/>（内存 Payload）"]
     end
 
     subgraph Quant["量化 & 数学"]
@@ -44,8 +44,8 @@ graph TB
 
     subgraph Persistence["持久化层"]
         VPS["VectorPersistenceStorage<br/>（接口）"]
-        SFS["SnapshotFileStorage"]
-        NPS["NoopVectorPersistenceStorage"]
+        MDB["MongoVectorPersistenceStorage"]
+        PG["PostgresVectorPersistenceStorage"]
     end
 
     subgraph Config["配置 / 装配"]
@@ -86,8 +86,8 @@ graph TB
     ES --> HP
 
     LE --> VPS
-    LE --> SFS
-    LE -.可选.-> NPS
+    LE --> MDB
+    LE --> PG
 
     AC --> VP
     AC --> LE
@@ -114,7 +114,7 @@ graph TB
 | **Embedding** | `veclite.embedding` | 外部 Embedding 服务的 HTTP 适配 | `EmbeddingProvider` 可替换为本地 ONNX 实现 |
 | **Engine** | `veclite.engine` | 内存向量库核心（索引 / 缓冲区 / 过滤） | `LocalVectorEngine` 是默认实现 |
 | **Quant / Math** | `veclite.quantization` `veclite.math` | SQ8 量化 + 距离计算 | `VectorMath` 可替换 native 实现 |
-| **Persistence** | `veclite.persistence` | 内存 → 磁盘的快照序列化 | `VectorPersistenceStorage` 可替换 |
+| **Persistence** | `veclite.persistence` | 数据库写透与启动重建 | `VectorPersistenceStorage` 可替换为 MongoDB / PostgreSQL |
 | **Config** | `veclite.config` | Spring Boot 自动装配 + 配置绑定 | — |
 | **Model** | `veclite.model` | 跨层传输的 DTO / 枚举 | — |
 
@@ -131,7 +131,7 @@ graph LR
         IDX["IdOffsetIndex<br/>──<br/>ID → offset 映射<br/>(long[] 平铺)"]
         DBS["DeletedBitSet<br/>──<br/>软删除位图"]
         MFI["MetadataFilterIndex<br/>──<br/>field=value → BitSet"]
-        PS["PayloadStorage<br/>──<br/>text + metadata<br/>（堆内或 mmap）"]
+        PS["PayloadStorage<br/>──<br/>text + metadata<br/>（堆内）"]
         VM["VectorMath<br/>──<br/>距离计算策略"]
     end
 
@@ -143,9 +143,9 @@ graph LR
     DEF -.维度/度量/量化.-> VB
     DEF -.索引字段.-> MFI
     DEF -.维度校验.-> VM
-    PROPS -->|"并行阈值 / mmap 开关"| Store
-    PERS <-->|"saveStore / loadStore"| VB
-    PERS <-->|"saveStore / loadStore"| PS
+    PROPS -->|"并行阈值 / 内存配置"| Store
+    PERS <-->|"写透 / 启动重建"| VB
+    PERS <-->|"写透 / 启动重建"| PS
 
     Store -->|"upsert / delete / search"| VB
     Store --> IDX
@@ -163,7 +163,7 @@ graph LR
 | `IdOffsetIndex` | `engine/IdOffsetIndex.java`<br>`engine/IntLongIdIndex.java` | 开放寻址 `long[]` 字典 | ID ↔ 缓冲区下标，**避免 HashMap 装箱** |
 | `DeletedBitSet` | `engine/DeletedBitSet.java` | `BitSet` | 软删除标记，**延迟回收**避免写时拷贝 |
 | `MetadataFilterIndex` | `engine/MetadataFilterIndex.java` | 倒排位图 | 过滤时给一个候选 BitSet，**纳秒级** |
-| `PayloadStorage` | `engine/CompactPayloadStorage.java`<br>`engine/MMapPayloadStorage.java` | 堆内 Map 或 mmap 文件 | text + metadata 不进主检索堆 |
+| `PayloadStorage` | `engine/CompactPayloadStorage.java` | 堆内紧凑 Map | text + metadata 与内存索引保持一致 |
 | `VectorMath` | `math/PureJavaVectorMath.java` | 函数指针 | COSINE / EUCLIDEAN / DOT_PRODUCT 距离 |
 
 ---

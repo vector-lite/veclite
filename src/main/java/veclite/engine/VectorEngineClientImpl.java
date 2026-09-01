@@ -122,11 +122,31 @@ public class VectorEngineClientImpl implements VectorEngineClient {
      */
     @Override
     public void createStore(String storeName, VectorStoreDefinition definition) {
-        localVectorEngine.createStore(storeName, definition);
-        if (documentPersistence != null) {
-            LocalVectorStore store = localVectorEngine.getStore(storeName);
-            persistence.loadStore(store);
-            documentPersistence.saveStoreMetadata(store);
+        boolean existed = localVectorEngine.hasStore(storeName);
+        try {
+            localVectorEngine.createStore(storeName, definition);
+            if (documentPersistence != null) {
+                LocalVectorStore store = localVectorEngine.getStore(storeName);
+                persistence.loadStore(store);
+                documentPersistence.saveStoreMetadata(store);
+            }
+        } catch (RuntimeException failure) {
+            // 新 Store 的持久化失败不得留下孤儿元数据/物理表；已有 Store 保留原状态。
+            if (!existed) {
+                try {
+                    if (documentPersistence != null) {
+                        try {
+                            documentPersistence.deleteStore(storeName);
+                        } catch (RuntimeException cleanupFailure) {
+                            log.warn("Failed to clean up Store [{}] after create failure: {}", storeName,
+                                    cleanupFailure.getMessage());
+                        }
+                    }
+                } finally {
+                    localVectorEngine.dropStore(storeName);
+                }
+            }
+            throw failure;
         }
     }
 

@@ -1,5 +1,9 @@
 # VecLite v2.5 MongoDB 单一真相源持久化设计方案
 
+> **实现状态（2026-08）**：数据库写透已是当前唯一生产持久化路径，支持 MongoDB 与 PostgreSQL。
+> 本文中关于 `SNAPSHOT_FILE`、OSS、HYBRID 和本地 MMap 的迁移方案属于历史设计记录，
+> 不代表当前自动配置或运行时行为；请以 `docs/architecture.md` 与 `docs/cluster-strategy.md` 为准。
+
 ## 1. 背景与目标
 
 v2.4 设计稿规划了"PostgreSQL 元数据 + OSS 向量快照"的混合持久化架构。经评估，当前实际规模为 **约 10 个 Store、单库数百至 5 万条向量**，远未达到需要对象存储分层的量级。v2.5 方案将架构收敛为：

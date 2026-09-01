@@ -21,6 +21,8 @@ import veclite.api.VectorStoreMetadata;
 import veclite.persistence.VectorDocumentEntity;
 import veclite.persistence.VectorDocumentRepository;
 import veclite.persistence.VectorStorageFormat;
+import veclite.persistence.StoreNameValidator;
+import veclite.persistence.StorePersistenceHandle;
 
 import java.util.ArrayList;
 import java.util.Date;
@@ -35,7 +37,7 @@ import java.util.Optional;
  * <p>
  * 集合结构见 design/v2.5/mongodb_persistence_design.md §2：
  * <ul>
- *   <li>文档集合：{@code (store_name, doc_id)} 唯一复合索引，向量以 BinData 存储
+ *   <li>每个 Store 使用独立文档集合，{@code doc_id} 唯一索引，向量以 BinData 存储
  *       （禁止 BSON double 数组——每元素 8 字节 double + 类型标记会带来近 3 倍膨胀）；</li>
  *   <li>元数据集合：{@code store_name} 唯一索引，1 库 1 文档。</li>
  * </ul>
@@ -47,9 +49,6 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
     private static final String FIELD_TEXT = "text";
     private static final String FIELD_METADATA = "metadata";
     private static final String FIELD_VECTOR = "vector";
-    private static final String FIELD_VECTOR_FORMAT = "vector_format";
-    private static final String FIELD_VECTOR_DIM = "vector_dim";
-    private static final String FIELD_EMBEDDING_MODEL = "embedding_model";
     private static final String FIELD_UPDATED_AT = "updated_at";
 
     private static final String META_DIMENSION = "dimension";
@@ -67,7 +66,6 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
 
     private final MongoClient mongoClient;
     private final MongoDatabase database;
-    private final String documentCollectionName;
     private final String metaCollectionName;
     private final int scanBatchSize;
 
@@ -75,7 +73,6 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         VectorLiteProperties.MongoConfig config = properties.getStorage().getMongodb();
         this.mongoClient = MongoClients.create(new ConnectionString(config.getUri()));
         this.database = mongoClient.getDatabase(config.getDatabase());
-        this.documentCollectionName = config.getDocumentCollection();
         this.metaCollectionName = config.getMetaCollection();
         this.scanBatchSize = config.getScanBatchSize() > 0 ? config.getScanBatchSize() : 1000;
         ensureSchema();
@@ -85,7 +82,6 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
                                   String documentCollectionName, String metaCollectionName, int scanBatchSize) {
         this.mongoClient = mongoClient;
         this.database = database;
-        this.documentCollectionName = documentCollectionName;
         this.metaCollectionName = metaCollectionName;
         this.scanBatchSize = scanBatchSize > 0 ? scanBatchSize : 1000;
         ensureSchema();
@@ -93,8 +89,29 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
 
     @Override
     public void ensureSchema() {
-        documents().createIndex(new Document(FIELD_STORE_NAME, 1).append(FIELD_DOC_ID, 1));
         storeMeta().createIndex(new Document(FIELD_STORE_NAME, 1));
+    }
+
+    @Override
+    public StorePersistenceHandle ensureStore(String storeName) {
+        StoreNameValidator.validate(storeName);
+        MongoCollection<Document> collection = documents(storeName);
+        collection.createIndex(new Document(FIELD_DOC_ID, 1), new com.mongodb.client.model.IndexOptions().unique(true));
+        collection.createIndex(new Document(FIELD_UPDATED_AT, 1));
+        return new StorePersistenceHandle(storeName, storeName);
+    }
+
+    @Override
+    public StorePersistenceHandle handle(String storeName) {
+        StoreNameValidator.validate(storeName);
+        return new StorePersistenceHandle(storeName, storeName);
+    }
+
+    @Override
+    public void dropStore(String storeName) {
+        StoreNameValidator.validate(storeName);
+        documents(storeName).drop();
+        deleteStoreMetadata(storeName);
     }
 
     @Override
@@ -102,15 +119,16 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         if (entities == null || entities.isEmpty()) {
             return;
         }
+        MongoCollection<Document> collection = ensureStore(storeName) != null ? documents(storeName) : null;
         List<ReplaceOneModel<Document>> operations = new ArrayList<>(entities.size());
         for (VectorDocumentEntity entity : entities) {
             operations.add(new ReplaceOneModel<>(
-                    Filters.and(Filters.eq(FIELD_STORE_NAME, storeName), Filters.eq(FIELD_DOC_ID, entity.getDocId())),
-                    toDocument(storeName, entity),
+                    Filters.eq(FIELD_DOC_ID, entity.getDocId()),
+                    toDocument(entity),
                     new ReplaceOptions().upsert(true)));
         }
         // ordered=false：批量导入时单条冲突不阻塞整批，最大化吞吐
-        documents().bulkWrite(operations, new BulkWriteOptions().ordered(false));
+        collection.bulkWrite(operations, new BulkWriteOptions().ordered(false));
     }
 
     @Override
@@ -118,30 +136,29 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         if (documentIds == null || documentIds.isEmpty()) {
             return 0;
         }
-        DeleteResult result = documents().deleteMany(
-                Filters.and(Filters.eq(FIELD_STORE_NAME, storeName), Filters.in(FIELD_DOC_ID, documentIds)));
+        DeleteResult result = documents(storeName).deleteMany(Filters.in(FIELD_DOC_ID, documentIds));
         return result.getDeletedCount();
     }
 
     @Override
     public long deleteAll(String storeName) {
-        return documents().deleteMany(Filters.eq(FIELD_STORE_NAME, storeName)).getDeletedCount();
+        return documents(storeName).deleteMany(new Document()).getDeletedCount();
     }
 
     @Override
     public Iterator<VectorDocumentEntity> scan(String storeName) {
-        return documents()
-                .find(Filters.eq(FIELD_STORE_NAME, storeName))
+        return documents(storeName)
+                .find()
                 .batchSize(scanBatchSize)
-                .map(this::toEntity)
+                .map(doc -> toEntity(doc, VectorStorageFormat.FLOAT32))
                 .iterator();
     }
 
     @Override
     public List<String> listDocumentIds(String storeName) {
         List<String> ids = new ArrayList<>();
-        try (MongoCursor<Document> cursor = documents()
-                .find(Filters.eq(FIELD_STORE_NAME, storeName))
+        try (MongoCursor<Document> cursor = documents(storeName)
+                .find()
                 .projection(Projections.include(FIELD_DOC_ID))
                 .batchSize(scanBatchSize)
                 .iterator()) {
@@ -154,7 +171,7 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
 
     @Override
     public long count(String storeName) {
-        return documents().countDocuments(Filters.eq(FIELD_STORE_NAME, storeName));
+        return documents(storeName).countDocuments();
     }
 
     @Override
@@ -193,39 +210,36 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         mongoClient.close();
     }
 
-    private MongoCollection<Document> documents() {
-        return database.getCollection(documentCollectionName);
+    private MongoCollection<Document> documents(String storeName) {
+        StoreNameValidator.validate(storeName);
+        return database.getCollection(storeName);
     }
 
     private MongoCollection<Document> storeMeta() {
         return database.getCollection(metaCollectionName);
     }
 
-    private Document toDocument(String storeName, VectorDocumentEntity entity) {
+    private Document toDocument(VectorDocumentEntity entity) {
         Document doc = new Document();
-        doc.append(FIELD_STORE_NAME, storeName);
         doc.append(FIELD_DOC_ID, entity.getDocId());
         doc.append(FIELD_TEXT, entity.getText());
         doc.append(FIELD_METADATA, entity.getMetadata() != null ? new Document(entity.getMetadata()) : null);
-        doc.append(FIELD_VECTOR_FORMAT, entity.getFormat().name());
         if (entity.getFormat() == VectorStorageFormat.SQ8) {
             doc.append(FIELD_VECTOR, entity.getSq8Vector());
         } else {
             doc.append(FIELD_VECTOR, VectorDocumentEntity.encodeVector(entity.getVector()));
         }
-        doc.append(FIELD_VECTOR_DIM, entity.getVectorDim());
-        doc.append(FIELD_EMBEDDING_MODEL, entity.getEmbeddingModel());
         doc.append(FIELD_UPDATED_AT, new Date());
         return doc;
     }
 
-    private VectorDocumentEntity toEntity(Document doc) {
+    private VectorDocumentEntity toEntity(Document doc, VectorStorageFormat format) {
         VectorDocumentEntity entity = new VectorDocumentEntity();
         entity.setDocId(doc.getString(FIELD_DOC_ID));
         entity.setText(doc.getString(FIELD_TEXT));
         Document metadata = doc.get(FIELD_METADATA, Document.class);
         entity.setMetadata(metadata != null ? new HashMap<>(metadata) : null);
-        entity.setFormat(parseFormat(doc.getString(FIELD_VECTOR_FORMAT)));
+        entity.setFormat(format);
         byte[] vector = asBytes(doc.get(FIELD_VECTOR));
         if (vector != null) {
             if (entity.getFormat() == VectorStorageFormat.SQ8) {
@@ -234,8 +248,6 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
                 entity.setVector(VectorDocumentEntity.decodeVector(vector));
             }
         }
-        entity.setVectorDim(doc.getInteger(FIELD_VECTOR_DIM, 0));
-        entity.setEmbeddingModel(doc.getString(FIELD_EMBEDDING_MODEL));
         Date updatedAt = doc.getDate(FIELD_UPDATED_AT);
         entity.setUpdatedAt(updatedAt != null ? updatedAt.toInstant() : null);
         return entity;

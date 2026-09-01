@@ -153,15 +153,15 @@ export async function renderSettings(container) {
 }
 
 /**
- * 批量入库压测面板：1w 条随机数据灌入指定 store。
- * - 按钮 1（文本输入）：随机生成 1w 条文本，走后端自动 Embedding
- * - 按钮 2（向量输入）：随机生成 1w 条 1024 维 float32 向量，L2 normalize 后入库
- * 后端走 /veclite/api/v1/stores/{name}/documents/batch，单次 500 条分批。
+ * 批量入库压测面板：随机数据灌入指定 store（条数 / 批次 / 维度均可配置）。
+ * - 按钮 1（文本输入）：随机生成文本，走后端自动 Embedding
+ * - 按钮 2（向量输入）：随机生成 ${dim} 维 float32 向量（维度可配置），L2 normalize 后入库
+ * 后端走 /veclite/api/v1/stores/{name}/documents/batch，按配置的 batch 分批。
  */
 function bulkSeedPanel() {
   const root = el(`
     <div class="panel" style="margin-top:16px">
-      <div class="panel-header">批量入库压测 <span class="cell-muted" style="font-weight:400;font-size:12px;margin-left:8px">1w 条随机数据 → store_bulk_test</span></div>
+      <div class="panel-header">批量入库压测 <span class="cell-muted" style="font-weight:400;font-size:12px;margin-left:8px">随机数据 → store_bulk_test</span></div>
       <div data-role="body" style="padding:16px">
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
           <label class="cell-muted" style="font-size:13px">目标 store：
@@ -173,10 +173,13 @@ function bulkSeedPanel() {
           <label class="cell-muted" style="font-size:13px">单批条数：
             <input class="input" data-role="batch" type="number" value="500" min="50" step="50" style="width:100px;margin-left:6px" />
           </label>
+          <label class="cell-muted" style="font-size:13px" title="向量模式=生成的随机向量维度；文本模式=需与 Embedding 服务输出维度一致">维度：
+            <input class="input" data-role="dim" type="number" value="1024" min="8" step="64" style="width:100px;margin-left:6px" />
+          </label>
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-primary" data-action="seed-text">随机文本 → Embedding 入库</button>
-          <button class="btn" data-action="seed-vector">随机 1024 维向量入库</button>
+          <button class="btn" data-action="seed-vector">随机 <span data-role="dim-label">1024</span> 维向量入库</button>
         </div>
         <div data-role="progress" style="margin-top:14px;font-family:monospace;font-size:12px;color:#475569;min-height:18px"></div>
       </div>
@@ -187,6 +190,13 @@ function bulkSeedPanel() {
   const storeInput = root.querySelector('[data-role=store]');
   const totalInput = root.querySelector('[data-role=total]');
   const batchInput = root.querySelector('[data-role=batch]');
+  const dimInput = root.querySelector('[data-role=dim]');
+  const dimLabel = root.querySelector('[data-role=dim-label]');
+
+  // 维度输入变化时，同步按钮上的文案
+  dimInput.addEventListener('input', () => {
+    dimLabel.textContent = dimInput.value.trim() || '1024';
+  });
 
   const log = (msg, isErr = false) => {
     progress.innerHTML = '';
@@ -280,15 +290,16 @@ function bulkSeedPanel() {
     const storeName = storeInput.value.trim() || 'store_bulk_test';
     const total = Math.max(100, parseInt(totalInput.value, 10) || 10000);
     const batchSize = Math.max(50, parseInt(batchInput.value, 10) || 500);
+    const dim = Math.max(8, parseInt(dimInput.value, 10) || 1024);
 
     const buttons = root.querySelectorAll('button[data-action]');
     buttons.forEach((b) => { b.disabled = true; });
     const startTs = performance.now();
-    log(`[start] mode=${mode}, store=${storeName}, total=${total}, batch=${batchSize}`);
+    log(`[start] mode=${mode}, store=${storeName}, dim=${dim}, total=${total}, batch=${batchSize}`);
 
     try {
       if (mode === 'text') {
-        await ensureStore(storeName, 1024);
+        await ensureStore(storeName, dim);
         const rand = rng(20260831);
         const docs = [];
         for (let i = 0; i < total; i++) {
@@ -305,13 +316,13 @@ function bulkSeedPanel() {
           log(`[run] ${done}/${totalAll} | 耗时 ${elapsed}s | QPS ${qps}`);
         });
       } else {
-        await ensureStore(storeName, 1024);
+        await ensureStore(storeName, dim);
         const rand = rng(20260831);
         const docs = [];
         for (let i = 0; i < total; i++) {
           docs.push({
             id: `seed_vec_${i.toString().padStart(6, '0')}`,
-            vector: randomUnitVector(rand, 1024),
+            vector: randomUnitVector(rand, dim),
             metadata: { source: 'bulk-seed-vector', idx: i, ts: Date.now() },
           });
         }

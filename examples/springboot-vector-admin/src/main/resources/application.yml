@@ -5,6 +5,9 @@ veclite:
     enabled: true
     allowed-origins: http://localhost:5173
   storage:
-    type: SNAPSHOT_FILE
-    snapshot-file:
-      base-path: ./data/vector-lite
+    # 生产环境统一使用数据库持久化；按部署环境覆盖连接参数。
+    type: POSTGRES
+    postgres:
+      jdbc-url: ${VECLITE_POSTGRES_URL:jdbc:postgresql://localhost:5432/veclite}
+      username: ${POSTGRES_USER:veclite}
+      password: ${POSTGRES_PASSWORD:veclite}

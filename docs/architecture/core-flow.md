@@ -29,8 +29,8 @@ flowchart TD
     K --> Z
     L --> Z
 
-    Z -.->|"（异步可选）<br/>SnapshotFileStorage"| M["flushIntervalSeconds 触发<br/>或用户手动 refresh"]
-    M --> N["写 store.json / vectors.bin /<br/>documents.jsonl 到磁盘"]
+    Z --> M["DocumentBackedPersistence.upsertDocuments"]
+    M --> N["MongoDB / PostgreSQL 文档表<br/>与元数据表写透"]
 ```
 
 ### 关键不变量
@@ -101,30 +101,21 @@ flowchart TD
     subgraph Refresh["refresh（内存 → 磁盘）"]
         R1["调用方 POST /stores/{name}/refresh"] --> R2["VectorEngineClientImpl.refresh"]
         R2 --> R3["persistence.saveStore(store)"]
-        R3 --> R4{"StorageType"}
-        R4 -- "NOOP" --> R5["空操作"]
-        R4 -- "SNAPSHOT_FILE" --> R6["SnapshotFileStorage.saveStore"]
-        R6 --> R7["1. 创建 {name}.tmp 临时目录"]
-        R7 --> R8["2. 写 store.json<br/>（维度/度量/模型）"]
-        R8 --> R9["3. 写 vectors.bin<br/>（未删除向量平铺）"]
-        R9 --> R10["4. 写 documents.jsonl<br/>（id + text + metadata）"]
-        R10 --> R11["5. ATOMIC_MOVE<br/>临时目录 → 正式目录"]
-        R11 --> R12["（写盘过程对崩溃安全）"]
+        R3 --> R4["DocumentBackedPersistence.saveStore"]
+        R4 --> R5["数据库事务内批量 upsert 文档<br/>并更新 Store 元数据"]
     end
 
     subgraph Reload["reload（磁盘 → 内存）"]
         L1["调用方 POST /stores/{name}/reload<br/>或应用启动时自动"] --> L2["VectorEngineClientImpl.reload"]
         L2 --> L3["persistence.loadStore(store)"]
-        L3 --> L4["1. 读 store.json 恢复定义"]
-        L4 --> L5["2. 读 vectors.bin 重建 vectorBuffer"]
-        L5 --> L6["3. 读 documents.jsonl 重建 payload"]
-        L6 --> L7["4. 重建 IdOffsetIndex"]
-        L7 --> L8["5. 重建 MetadataFilterIndex"]
+        L3 --> L4["按主键分页读取数据库文档与元数据"]
+        L4 --> L5["重建 vectorBuffer / PayloadStorage"]
+        L5 --> L6["重建 IdOffsetIndex 与 MetadataFilterIndex"]
     end
 ```
 
 ### 持久化的关键不变量
 
-- **不写半成品**：`.tmp` 目录 + `ATOMIC_MOVE`（`SnapshotFileStorage.java:56-60`）—— 写到一半崩了，旧文件还在
-- **写的是未删除的向量**：`DeletedBitSet` 的位会被跳过，所以"已删但物理还在"的向量不会写盘
-- **不自动刷盘**：写入只改内存，**`flushIntervalSeconds` 是应用启动时的兜底定时器**（`SnapshotFileConfig.flushIntervalSeconds=30` 默认 30 秒）—— 你不点 refresh、也不等定时器，数据就只在内存
+- **写透数据库**：文档 upsert/delete 成功即写入 MongoDB 或 PostgreSQL，避免本地快照刷盘窗口
+- **启动可恢复**：按主键分页读取数据库记录，重建向量、Payload 和过滤索引
+- **refresh 用于对账**：显式 refresh 触发整库批量对账，不依赖定时刷盘

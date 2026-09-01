@@ -32,11 +32,7 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
     private static final String FIELD_TIMEOUT = "timeout_millis";
     private static final String FIELD_BATCH_SIZE = "batch_size";
     private static final String FIELD_UPDATED_AT = "updated_at";
-    private static final String FIELD_DEFAULT_NAME = "default_name";
-    private static final String FIELD_DEFAULT_VERSION = "default_version";
-    /** 旧版单字段默认标记（仅名称） */
-    private static final String LEGACY_FIELD_DEFAULT_MODEL = "default_model";
-    private static final String DEFAULT_MARKER_ID = "__default__";
+    private static final String FIELD_IS_DEFAULT = "is_default";
 
     private final MongoClient mongoClient;
     private final MongoCollection<Document> collection;
@@ -80,6 +76,8 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
                         new Document(FIELD_NAME, 1).append(FIELD_VERSION, 1),
                         new IndexOptions().unique(true).name("name_1_version_1"));
             }
+            collection.createIndex(new Document(FIELD_IS_DEFAULT, 1),
+                    new IndexOptions().unique(true).partialFilterExpression(Filters.eq(FIELD_IS_DEFAULT, true)).name("uq_embedding_default"));
         } catch (Exception ignored) {
             // 索引迁移失败只影响防重保护强度（upsert 仍按 name+version 过滤生效），不阻断应用启动
         }
@@ -89,12 +87,6 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
     public List<VectorLiteProperties.ModelConfig> loadAll() {
         List<VectorLiteProperties.ModelConfig> result = new ArrayList<>();
         for (Document doc : collection.find()) {
-            // 默认标记文档的 _id 是字符串 "__default__"，普通模型文档的 _id 是 Mongo 自动生成的 ObjectId。
-            // 必须按类型判断后再比较，直接 getString("_id") 遇 ObjectId 会抛 ClassCastException。
-            Object id = doc.get("_id");
-            if (id instanceof String marker && DEFAULT_MARKER_ID.equals(marker)) {
-                continue;
-            }
             VectorLiteProperties.ModelConfig config = new VectorLiteProperties.ModelConfig();
             config.setName(doc.getString(FIELD_NAME));
             config.setVersion(doc.getString(FIELD_VERSION));
@@ -104,6 +96,7 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
             config.setDimension(doc.getInteger(FIELD_DIMENSION, 0));
             config.setTimeoutMillis(doc.getInteger(FIELD_TIMEOUT, 3000));
             config.setBatchSize(doc.getInteger(FIELD_BATCH_SIZE, 1));
+            config.setDefault(doc.getBoolean(FIELD_IS_DEFAULT, false));
             result.add(config);
         }
         return result;
@@ -119,6 +112,7 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
                 .append(FIELD_DIMENSION, config.getDimension())
                 .append(FIELD_TIMEOUT, config.getTimeoutMillis())
                 .append(FIELD_BATCH_SIZE, config.getBatchSize())
+                .append(FIELD_IS_DEFAULT, config.isDefault())
                 .append(FIELD_UPDATED_AT, new Date());
         collection.replaceOne(
                 Filters.and(Filters.eq(FIELD_NAME, config.getName()), Filters.eq(FIELD_VERSION, config.getVersion())),
@@ -134,30 +128,17 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
 
     @Override
     public void saveDefault(EmbeddingModelRef ref) {
-        if (ref == null) {
-            collection.deleteOne(Filters.eq("_id", DEFAULT_MARKER_ID));
-            return;
+        collection.updateMany(new Document(), new Document("$set", new Document(FIELD_IS_DEFAULT, false)));
+        if (ref != null) {
+            collection.updateOne(Filters.and(Filters.eq(FIELD_NAME, ref.name()), Filters.eq(FIELD_VERSION, ref.version())),
+                    new Document("$set", new Document(FIELD_IS_DEFAULT, true)));
         }
-        collection.replaceOne(Filters.eq("_id", DEFAULT_MARKER_ID),
-                new Document("_id", DEFAULT_MARKER_ID)
-                        .append(FIELD_DEFAULT_NAME, ref.name())
-                        .append(FIELD_DEFAULT_VERSION, ref.version()),
-                new ReplaceOptions().upsert(true));
     }
 
     @Override
     public EmbeddingModelRef loadDefault() {
-        Document doc = collection.find(Filters.eq("_id", DEFAULT_MARKER_ID)).first();
-        if (doc == null) {
-            return null;
-        }
-        String name = doc.getString(FIELD_DEFAULT_NAME);
-        if (name != null) {
-            return new EmbeddingModelRef(name, doc.getString(FIELD_DEFAULT_VERSION));
-        }
-        // 旧格式：仅存名称（单字段唯一键时代的标记），版本留空由注册中心解析主版本
-        String legacyName = doc.getString(LEGACY_FIELD_DEFAULT_MODEL);
-        return legacyName != null ? new EmbeddingModelRef(legacyName, null) : null;
+        Document doc = collection.find(Filters.eq(FIELD_IS_DEFAULT, true)).first();
+        return doc == null ? null : new EmbeddingModelRef(doc.getString(FIELD_NAME), doc.getString(FIELD_VERSION));
     }
 
     public void close() {

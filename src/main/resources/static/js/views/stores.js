@@ -182,10 +182,9 @@ const QUANTIZATION_OPTIONS = [
 
 async function createStoreDialog(onDone) {
   let models = [];
-  try { models = (await api.embeddingModels()) || []; } catch { /* 模型接口不可用时允许不绑定 */ }
+  try { models = (await api.embeddingModels()) || []; } catch { /* 模型接口不可用时由必选校验提示 */ }
 
   const modelOptions = [
-    { value: '', label: '不绑定' },
     ...models.map((m) => ({
       value: `${m.name}\u001F${m.version || '1'}`,
       label: `${m.name} v${m.version || '1'}${m.defaultModel ? '（默认）' : ''}`,
@@ -197,8 +196,7 @@ async function createStoreDialog(onDone) {
     okLabel: '创建',
     fields: [
       { name: 'storeName', label: '名称', placeholder: '例如 knowledge-base' },
-      { name: 'embeddingModel', label: 'Embedding 数据源', type: 'select', options: modelOptions },
-      { name: 'dimension', label: '向量维度', type: 'number', value: '512' },
+      { name: 'embeddingModel', label: 'Embedding 数据源（必选）', type: 'select', options: modelOptions },
       { name: 'metric', label: '距离度量', type: 'select', options: METRIC_OPTIONS },
       { name: 'maxCapacity', label: '最大容量', type: 'number', value: '100000' },
       { name: 'quantization', label: '量化方式', type: 'select', options: QUANTIZATION_OPTIONS },
@@ -207,20 +205,22 @@ async function createStoreDialog(onDone) {
   });
   if (!values) return;
   if (!values.storeName) { toast('请输入向量库名称', true); return; }
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,62}$/.test(values.storeName)) {
+    toast('名称须以字母开头，仅支持字母、数字、下划线和短横线，最长 63 个字符', true);
+    return;
+  }
 
-  const dim = Number(values.dimension);
-  if (!Number.isInteger(dim) || dim <= 0) { toast('维度须为正整数', true); return; }
   const cap = Number(values.maxCapacity);
   if (!Number.isInteger(cap) || cap <= 0) { toast('容量须为正整数', true); return; }
 
   // 选项值为 "模型名\u001F版本"，拆开后（名称, 版本）一起绑定到 Store
-  let boundModel = null;
-  let boundVersion = null;
-  if (values.embeddingModel) {
-    const sep = values.embeddingModel.indexOf('\u001F');
-    boundModel = sep >= 0 ? values.embeddingModel.slice(0, sep) : values.embeddingModel;
-    boundVersion = sep >= 0 ? values.embeddingModel.slice(sep + 1) : null;
-  }
+  if (!values.embeddingModel) { toast('必须绑定 Embedding 模型', true); return; }
+  const sep = values.embeddingModel.indexOf('\u001F');
+  const boundModel = sep >= 0 ? values.embeddingModel.slice(0, sep) : values.embeddingModel;
+  const boundVersion = sep >= 0 ? values.embeddingModel.slice(sep + 1) : null;
+  const selectedModel = models.find((m) => m.name === boundModel && String(m.version || '1') === String(boundVersion || '1'));
+  const dim = Number(selectedModel && selectedModel.dimension);
+  if (!Number.isInteger(dim) || dim <= 0) { toast('所选 Embedding 模型未配置有效维度', true); return; }
 
   const definition = {
     storeName: values.storeName,

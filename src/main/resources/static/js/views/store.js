@@ -304,13 +304,34 @@ function renderSearchDebug(container, storeName, stats) {
         <select class="select" data-f="op" style="width:90px">
           <option value="EQ">等于</option>
           <option value="IN">属于</option>
+          <option value="GT">大于</option>
+          <option value="LT">小于</option>
         </select>
         <input class="input" data-f="value" placeholder="值（IN 用逗号分隔）" style="flex:1">
         <button class="btn btn-icon btn-danger" title="移除">${icons.trash(14)}</button>
       </div>`);
     row.querySelector('button').addEventListener('click', () => row.remove());
+    row.querySelector('[data-f=op]').addEventListener('change', (e) => onOpChange(row, e.target.value));
     filters.appendChild(row);
   });
+
+  // 算子变更时调整 placeholder，避免 GT/LT 输入"a,b"被误识别
+  function onOpChange(row, op) {
+    const valueInput = row.querySelector('[data-f=value]');
+    if (op === 'GT' || op === 'LT') {
+      valueInput.placeholder = '数值（如 0.5、100）';
+      valueInput.type = 'number';
+      valueInput.step = 'any';
+    } else if (op === 'IN') {
+      valueInput.placeholder = '值（逗号分隔，如 a,b,c）';
+      valueInput.type = 'text';
+      valueInput.removeAttribute('step');
+    } else {
+      valueInput.placeholder = '值';
+      valueInput.type = 'text';
+      valueInput.removeAttribute('step');
+    }
+  }
 
   conditionPanel.querySelector('[data-action=run-search]').addEventListener('click', async () => {
     const topK = Math.max(1, Number(container.querySelector('[data-role=topk]').value) || 5);
@@ -343,31 +364,40 @@ function renderSearchDebug(container, storeName, stats) {
   function buildFilter() {
     const rows = [...filters.querySelectorAll('.filter-row')];
     if (rows.length === 0) return null;
+    if (rows.length > 1) toast('引擎当前支持单条件过滤，已取第一行', true);
     const first = rows[0];
     const op = first.querySelector('[data-f=op]').value;
-    if (rows.length > 1 || op === 'IN') {
-      // 多条件或 IN：用 IN 承载多值；多字段时取首个（引擎当前支持单条件）
-      if (rows.length > 1) toast('引擎当前支持单条件过滤，已取第一行', true);
-      const field = first.querySelector('[data-f=field]').value.trim();
-      if (!field) return null;
-      const raw = first.querySelector('[data-f=value]').value;
-      const values = raw.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
-      return op === 'IN'
-        ? { field, operator: 'IN', values }
-        : { field, operator: 'EQ', value: coerce(raw.trim()) };
-    }
     const field = first.querySelector('[data-f=field]').value.trim();
     if (!field) return null;
     const raw = first.querySelector('[data-f=value]').value.trim();
-    return op === 'IN'
-      ? { field, operator: 'IN', values: raw.split(/[,，]/).map((s) => coerce(s.trim())).filter((v) => v !== '') }
-      : { field, operator: 'EQ', value: coerce(raw) };
+
+    if (op === 'IN') {
+      // IN 列表：只把"纯数字字面量"转成 Number（与元数据 JSONB number 对齐），
+      // 字符串"abc"和"true"原样保留——避免过去 coerce 一刀切导致既不命中数字也不命中字符串。
+      const values = raw.split(/[,，]/).map((s) => s.trim()).filter(Boolean).map(coerceEq);
+      return { field, operator: 'IN', values };
+    }
+    if (op === 'GT' || op === 'LT') {
+      // 强制数值，无法解析则提示
+      const num = Number(raw);
+      if (raw === '' || Number.isNaN(num)) {
+        toast('大于/小于需要数值类型', true);
+        return null;
+      }
+      return { field, operator: op, value: num };
+    }
+    // EQ：保留字符串（除非前后空格后看起来是数字/布尔，且用户没显式标引号）
+    return { field, operator: 'EQ', value: coerceEq(raw) };
   }
 
-  function coerce(text) {
+  // EQ 专用：尽量"原样"。仅当用户输入的字符串解析后与原值完全相同时才转类型，
+  // 避免把"123"盲目转成 Number(123) 导致和字符串"123"不匹配。
+  function coerceEq(text) {
+    if (text === '') return text;
     if (text === 'true') return true;
     if (text === 'false') return false;
-    if (text !== '' && !Number.isNaN(Number(text))) return Number(text);
+    // 仅当整个串就是个纯数字字面量才转 Number
+    if (/^-?\d+(\.\d+)?$/.test(text)) return Number(text);
     return text;
   }
 

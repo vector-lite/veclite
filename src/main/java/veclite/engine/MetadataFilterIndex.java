@@ -75,6 +75,8 @@ public class MetadataFilterIndex {
     /**
      * 根据 FilterExpression 表达式生成匹配的 BitSet（若该字段已建立倒排索引）。
      * 若无法用索引求值，返回 null，由上层降级为逐条对象属性比较。
+     * 注：GT/LT 是范围匹配，倒排位图（离散 value→BitSet）无法直接表达，
+     *     主动返回 null 让上层走逐条比较逻辑。
      */
     public BitSet evaluate(FilterExpression filter) {
         if (filter == null || filter.getField() == null || !isIndexed(filter.getField())) {
@@ -88,6 +90,7 @@ public class MetadataFilterIndex {
         } else if (op == FilterExpression.Operator.IN) {
             return getMatchingOffsetsIn(field, filter.getValues());
         }
+        // GT / LT：返回 null，降级到 LocalVectorStore.matchesFilter 逐条比较
         return null;
     }
 

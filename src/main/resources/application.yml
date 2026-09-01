@@ -9,7 +9,7 @@ veclite:
   # Embedding 数据源已改为数据库维护：通过数据源管理页或 /embedding/models 接口增删改查
   storage:
     # 数据库持久化后端全局开关：MONGODB | POSTGRES
-    type: MONGODB
+    type: POSTGRES
     mongodb:                  # type=MONGODB 时生效
       uri: mongodb://localhost:27017/veclite
       database: veclite

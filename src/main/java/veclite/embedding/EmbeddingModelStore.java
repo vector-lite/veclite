@@ -23,11 +23,10 @@ public interface EmbeddingModelStore {
     boolean delete(String name, String version);
 
     /**
-     * 持久化"默认模型"标记（精确到版本；ref 为 null 表示清除标记）。
-     * 兼容旧格式：仅含名称的旧标记按"该名称主版本"处理。
+     * 持久化模型表中的全局默认标记（精确到版本；ref 为 null 表示清除标记）。
      */
     void saveDefault(EmbeddingModelRef ref);
 
-    /** 读取持久化的"默认模型"标记，未设置时返回 null */
+    /** 从模型表读取默认标记，未设置时返回 null。 */
     EmbeddingModelRef loadDefault();
 }

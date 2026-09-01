@@ -15,6 +15,21 @@ import java.util.Optional;
  */
 public interface VectorDocumentRepository {
 
+    /** Ensure the physical document resource for one Store exists. */
+    default StorePersistenceHandle ensureStore(String storeName) {
+        return new StorePersistenceHandle(storeName, storeName);
+    }
+
+    /** Resolve the physical document resource for one Store. */
+    default StorePersistenceHandle handle(String storeName) {
+        return new StorePersistenceHandle(storeName, storeName);
+    }
+
+    /** Drop the physical document resource for one Store. */
+    default void dropStore(String storeName) {
+        deleteAll(storeName);
+    }
+
     /** 幂等初始化 schema（建集合/表与唯一索引），在仓储构造时调用 */
     void ensureSchema();
 

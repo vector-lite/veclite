@@ -10,14 +10,12 @@ import veclite.embedding.HttpEmbeddingProvider;
 import veclite.engine.LocalVectorEngine;
 import veclite.engine.VectorEngineClientImpl;
 import veclite.model.StorageType;
-import veclite.persistence.NoopVectorPersistenceStorage;
 import veclite.persistence.mongo.MongoEmbeddingModelStore;
 import veclite.persistence.mongo.MongoVectorDocumentRepository;
 import veclite.persistence.mongo.MongoVectorPersistenceStorage;
 import veclite.persistence.postgres.PostgresEmbeddingModelStore;
 import veclite.persistence.postgres.PostgresVectorDocumentRepository;
 import veclite.persistence.postgres.PostgresVectorPersistenceStorage;
-import veclite.persistence.SnapshotFileStorage;
 import veclite.persistence.VectorPersistenceStorage;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -25,7 +23,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import veclite.web.VectorLiteDebugController;
 import veclite.web.VectorLiteUiController;
 
@@ -35,14 +32,14 @@ import veclite.web.VectorLiteUiController;
  * 当 `veclite.enabled=true`（默认开启）时激活，
  * 向 Spring 容器注入 EmbeddingProvider、VectorPersistenceStorage、LocalVectorEngine 和 VectorEngineClient。
  * <p>
- * 持久化后端由 {@code veclite.storage.type} 单点切换（NOOP / SNAPSHOT_FILE / MONGODB / POSTGRES），
- * 业务代码零感知：{@link VectorPersistenceStorage} 端口语义不变，仅换实现。
+ * 持久化后端由 {@code veclite.storage.type} 单点切换（MONGODB / POSTGRES）。
+ * 数据库是生产环境唯一持久化路径；旧的文件快照和纯内存枚举值仅为源码兼容保留，
+ * 不再由自动配置装配。
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(name = "veclite.enabled", havingValue = "true", matchIfMissing = true)
 @EnableConfigurationProperties(VectorLiteProperties.class)
 @Import({VectorLiteDebugController.class, VectorLiteUiController.class})
-@EnableScheduling
 public class VectorLiteAutoConfiguration {
 
     /**
@@ -79,18 +76,17 @@ public class VectorLiteAutoConfiguration {
     @ConditionalOnMissingBean
     public VectorPersistenceStorage vectorPersistenceStorage(VectorLiteProperties properties) {
         StorageType type = properties.getStorage().getType();
-        if (type == StorageType.SNAPSHOT_FILE) {
-            return new SnapshotFileStorage(properties);
+        if (type == null) {
+            throw new IllegalStateException("veclite.storage.type must be MONGODB or POSTGRES");
         }
-        if (type == StorageType.MONGODB) {
-            return new MongoVectorPersistenceStorage(
+        return switch (type) {
+            case MONGODB -> new MongoVectorPersistenceStorage(
                     new MongoVectorDocumentRepository(properties), properties);
-        }
-        if (type == StorageType.POSTGRES) {
-            return new PostgresVectorPersistenceStorage(
+            case POSTGRES -> new PostgresVectorPersistenceStorage(
                     new PostgresVectorDocumentRepository(properties), properties);
-        }
-        return new NoopVectorPersistenceStorage();
+            case NOOP, SNAPSHOT_FILE -> throw new IllegalStateException(
+                    "Database persistence is required; unsupported storage type: " + type);
+        };
     }
 
     /**

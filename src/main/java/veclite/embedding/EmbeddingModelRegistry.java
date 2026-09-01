@@ -37,7 +37,7 @@ public class EmbeddingModelRegistry {
     /** 托管配置：key 为（name + '\u001F' + version）复合键；LinkedHashMap 保证主版本按插入序解析 */
     private final Map<String, VectorLiteProperties.ModelConfig> managed =
             Collections.synchronizedMap(new LinkedHashMap<>());
-    /** 托管侧设置的默认模型；为 null 时回退到 yml 的 default-model */
+    /** 托管侧设置的默认模型；为 null 时表示未设置默认模型。 */
     private volatile EmbeddingModelRef managedDefault;
 
     public EmbeddingModelRegistry(EmbeddingModelStore store) {

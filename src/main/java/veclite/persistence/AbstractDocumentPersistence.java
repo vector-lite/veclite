@@ -61,6 +61,7 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
             return;
         }
         String storeName = store.getDefinition().getStoreName();
+        repository.ensureStore(storeName);
         List<VectorDocumentEntity> entities = buildEntities(store);
         repository.upsertBatch(storeName, entities);
 
@@ -90,6 +91,7 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
             return;
         }
         String storeName = store.getDefinition().getStoreName();
+        repository.ensureStore(storeName);
         int dimension = store.getDefinition().getDimension();
 
         VectorStoreMetadata metadata = repository.findStoreMetadata(storeName).orElse(null);
@@ -111,7 +113,7 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
         Iterator<VectorDocumentEntity> cursor = repository.scan(storeName);
         while (cursor.hasNext()) {
             VectorDocumentEntity entity = cursor.next();
-            if (entity.getFormat() == VectorStorageFormat.SQ8) {
+            if (entity.getSq8Vector() != null) {
                 if (!store.isSQ8Frozen()) {
                     throw new IllegalStateException("Store [" + storeName + "] persisted SQ8 document ["
                             + entity.getDocId() + "] but frozen params are missing");
@@ -136,7 +138,7 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
 
     @Override
     public synchronized void deleteStore(String storeName) {
-        repository.deleteAll(storeName);
+        repository.dropStore(storeName);
         repository.deleteStoreMetadata(storeName);
     }
 
@@ -149,7 +151,6 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
             return;
         }
         String storeName = store.getDefinition().getStoreName();
-        String embeddingModel = store.getDefinition().getEmbeddingModel();
         List<VectorDocumentEntity> entities = new ArrayList<>(documents.size());
         for (VectorDocument document : documents) {
             if (document == null || document.getId() == null) {
@@ -160,7 +161,7 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
                         + "] must carry a vector before write-through persistence");
             }
             entities.add(VectorDocumentEntity.float32(document.getId(), document.getText(),
-                    document.getMetadata(), document.getVector(), embeddingModel));
+                    document.getMetadata(), document.getVector()));
         }
         repository.upsertBatch(storeName, entities);
     }
@@ -172,6 +173,7 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
 
     @Override
     public void saveStoreMetadata(LocalVectorStore store) {
+        repository.ensureStore(store.getDefinition().getStoreName());
         repository.saveStoreMetadata(buildMetadata(store));
     }
 
@@ -217,12 +219,9 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
      */
     private List<VectorDocumentEntity> buildEntities(LocalVectorStore store) {
         int dimension = store.getDefinition().getDimension();
-        boolean persistSQ8 = store.isSQ8Enabled() && store.isSQ8Frozen();
-        String embeddingModel = store.getDefinition().getEmbeddingModel();
         int totalCount = store.getVectorBufferSize();
         List<VectorDocumentEntity> entities = new ArrayList<>(store.getActiveCount());
         float[] tempVector = new float[dimension];
-        byte[] tempBytes = new byte[dimension];
         for (int offset = 0; offset < totalCount; offset++) {
             if (store.isOffsetDeleted(offset)) {
                 continue;
@@ -231,15 +230,9 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
             if (payload == null) {
                 continue;
             }
-            if (persistSQ8) {
-                store.copySQ8VectorFromBuffer(offset, tempBytes);
-                entities.add(VectorDocumentEntity.sq8(payload.getId(), payload.getText(), payload.getMetadata(),
-                        tempBytes.clone(), dimension, embeddingModel));
-            } else {
-                store.copyVectorFromBuffer(offset, tempVector);
-                entities.add(VectorDocumentEntity.float32(payload.getId(), payload.getText(), payload.getMetadata(),
-                        tempVector.clone(), embeddingModel));
-            }
+            store.copyVectorFromBuffer(offset, tempVector);
+            entities.add(VectorDocumentEntity.float32(payload.getId(), payload.getText(), payload.getMetadata(),
+                    tempVector.clone()));
         }
         return entities;
     }
@@ -259,11 +252,11 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
         document.setId(entity.getDocId());
         document.setText(entity.getText());
         document.setMetadata(entity.getMetadata());
-        if (entity.getFormat() == VectorStorageFormat.FLOAT32) {
+        if (entity.getVector() != null) {
             document.setVector(entity.getVector());
         } else {
             // SQ8 文档的向量由 restoreDocumentWithSQ8 直接注入量化字节，绕过反量化往返
-            document.setVector(new float[entity.getVectorDim()]);
+            document.setVector(new float[0]);
         }
         return document;
     }

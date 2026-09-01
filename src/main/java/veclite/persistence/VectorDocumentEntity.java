@@ -23,8 +23,9 @@ public class VectorDocumentEntity {
     private float[] vector;
     /** SQ8 格式的量化字节（1 字节/维） */
     private byte[] sq8Vector;
-    private int vectorDim;
-    private String embeddingModel;
+    /** @deprecated 仅兼容旧序列化/调用方，不参与持久化。 */
+    @Deprecated
+    private String legacyEmbeddingModel;
     private Instant updatedAt;
 
     /**
@@ -59,28 +60,42 @@ public class VectorDocumentEntity {
     }
 
     public static VectorDocumentEntity float32(String docId, String text, Map<String, Object> metadata,
-                                               float[] vector, String embeddingModel) {
+                                               float[] vector) {
         VectorDocumentEntity entity = new VectorDocumentEntity();
         entity.setDocId(docId);
         entity.setText(text);
         entity.setMetadata(metadata);
         entity.setFormat(VectorStorageFormat.FLOAT32);
         entity.setVector(vector);
-        entity.setVectorDim(vector != null ? vector.length : 0);
-        entity.setEmbeddingModel(embeddingModel);
+        return entity;
+    }
+
+    /** @deprecated embeddingModel 已提升到 Store 元数据。 */
+    @Deprecated
+    public static VectorDocumentEntity float32(String docId, String text, Map<String, Object> metadata,
+                                               float[] vector, String ignoredEmbeddingModel) {
+        VectorDocumentEntity entity = float32(docId, text, metadata, vector);
+        entity.legacyEmbeddingModel = ignoredEmbeddingModel;
         return entity;
     }
 
     public static VectorDocumentEntity sq8(String docId, String text, Map<String, Object> metadata,
-                                           byte[] sq8Vector, int dimension, String embeddingModel) {
+                                           byte[] sq8Vector) {
         VectorDocumentEntity entity = new VectorDocumentEntity();
         entity.setDocId(docId);
         entity.setText(text);
         entity.setMetadata(metadata);
         entity.setFormat(VectorStorageFormat.SQ8);
         entity.setSq8Vector(sq8Vector);
-        entity.setVectorDim(dimension);
-        entity.setEmbeddingModel(embeddingModel);
+        return entity;
+    }
+
+    /** @deprecated 维度由 Store 元数据提供。 */
+    @Deprecated
+    public static VectorDocumentEntity sq8(String docId, String text, Map<String, Object> metadata,
+                                           byte[] sq8Vector, int ignoredDimension, String ignoredEmbeddingModel) {
+        VectorDocumentEntity entity = sq8(docId, text, metadata, sq8Vector);
+        entity.legacyEmbeddingModel = ignoredEmbeddingModel;
         return entity;
     }
 
@@ -96,10 +111,12 @@ public class VectorDocumentEntity {
     public void setVector(float[] vector) { this.vector = vector; }
     public byte[] getSq8Vector() { return sq8Vector; }
     public void setSq8Vector(byte[] sq8Vector) { this.sq8Vector = sq8Vector; }
-    public int getVectorDim() { return vectorDim; }
-    public void setVectorDim(int vectorDim) { this.vectorDim = vectorDim; }
-    public String getEmbeddingModel() { return embeddingModel; }
-    public void setEmbeddingModel(String embeddingModel) { this.embeddingModel = embeddingModel; }
+    /** @deprecated 维度由 Store 元数据提供。 */
+    @Deprecated
+    public int getVectorDim() { return vector != null ? vector.length : (sq8Vector != null ? sq8Vector.length : 0); }
+    /** @deprecated Embedding 模型由 Store 元数据提供。 */
+    @Deprecated
+    public String getEmbeddingModel() { return legacyEmbeddingModel; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 }

@@ -12,8 +12,7 @@ import java.util.List;
 /**
  * {@link EmbeddingModelStore} 的 PostgreSQL 实现：托管模型配置存储于
  * {@code veclite_embedding_model} 表，主键为（name, version）复合主键；
- * "默认模型"标记单独存于 {@code veclite_embedding_default} 表的单行记录，
- * 与 MongoDB 实现的语义完全一致。
+ * 全局默认模型通过该表的 {@code is_default} 字段标记。
  */
 public class PostgresEmbeddingModelStore implements EmbeddingModelStore {
 
@@ -27,14 +26,10 @@ public class PostgresEmbeddingModelStore implements EmbeddingModelStore {
     private static final String FIELD_BATCH_SIZE = "batch_size";
     private static final String FIELD_UPDATED_AT = "updated_at";
 
-    private static final String DEFAULT_MARKER_ID = "__default__";
-    private static final String FIELD_MARKER_ID = "marker_id";
-    private static final String FIELD_DEFAULT_NAME = "default_name";
-    private static final String FIELD_DEFAULT_VERSION = "default_version";
+    private static final String FIELD_IS_DEFAULT = "is_default";
 
     private final JdbcTemplate jdbc;
     private final String modelTable;
-    private final String defaultTable;
 
     public PostgresEmbeddingModelStore(VectorLiteProperties properties) {
         this(properties, createDataSource(properties));
@@ -44,7 +39,6 @@ public class PostgresEmbeddingModelStore implements EmbeddingModelStore {
         VectorLiteProperties.PostgresConfig config = properties.getStorage().getPostgres();
         this.jdbc = new JdbcTemplate(dataSource);
         this.modelTable = config.getEmbeddingModelTable();
-        this.defaultTable = "veclite_embedding_default";
         ensureSchema();
     }
 
@@ -67,20 +61,18 @@ public class PostgresEmbeddingModelStore implements EmbeddingModelStore {
                 + FIELD_DIMENSION + "   INT DEFAULT 0, "
                 + FIELD_TIMEOUT + "     INT DEFAULT 3000, "
                 + FIELD_BATCH_SIZE + "  INT DEFAULT 1, "
+                + FIELD_IS_DEFAULT + "   BOOLEAN NOT NULL DEFAULT FALSE, "
                 + FIELD_UPDATED_AT + "  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, "
                 + "PRIMARY KEY (" + FIELD_NAME + ", " + FIELD_VERSION + "))");
-
-        jdbc.execute("CREATE TABLE IF NOT EXISTS " + defaultTable + " ("
-                + FIELD_MARKER_ID + "       VARCHAR(32) PRIMARY KEY, "
-                + FIELD_DEFAULT_NAME + "    VARCHAR(128), "
-                + FIELD_DEFAULT_VERSION + " VARCHAR(64))");
+        jdbc.execute("ALTER TABLE " + modelTable + " ADD COLUMN IF NOT EXISTS " + FIELD_IS_DEFAULT + " BOOLEAN NOT NULL DEFAULT FALSE");
+        jdbc.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_" + modelTable + "_default ON " + modelTable + " (" + FIELD_IS_DEFAULT + ") WHERE " + FIELD_IS_DEFAULT + " = TRUE");
     }
 
     @Override
     public List<VectorLiteProperties.ModelConfig> loadAll() {
         return jdbc.query("SELECT " + FIELD_NAME + ", " + FIELD_VERSION + ", " + FIELD_PROVIDER + ", "
                 + FIELD_URL + ", " + FIELD_API_KEY + ", " + FIELD_DIMENSION + ", "
-                + FIELD_TIMEOUT + ", " + FIELD_BATCH_SIZE + " FROM " + modelTable,
+                + FIELD_TIMEOUT + ", " + FIELD_BATCH_SIZE + ", " + FIELD_IS_DEFAULT + " FROM " + modelTable,
                 (rs, rowNum) -> {
                     VectorLiteProperties.ModelConfig config = new VectorLiteProperties.ModelConfig();
                     config.setName(rs.getString(FIELD_NAME));
@@ -91,6 +83,7 @@ public class PostgresEmbeddingModelStore implements EmbeddingModelStore {
                     config.setDimension(rs.getInt(FIELD_DIMENSION));
                     config.setTimeoutMillis(rs.getInt(FIELD_TIMEOUT));
                     config.setBatchSize(rs.getInt(FIELD_BATCH_SIZE));
+                    config.setDefault(rs.getBoolean(FIELD_IS_DEFAULT));
                     return config;
                 });
     }
@@ -99,8 +92,8 @@ public class PostgresEmbeddingModelStore implements EmbeddingModelStore {
     public void save(VectorLiteProperties.ModelConfig config) {
         jdbc.update("INSERT INTO " + modelTable + " ("
                 + FIELD_NAME + ", " + FIELD_VERSION + ", " + FIELD_PROVIDER + ", " + FIELD_URL + ", "
-                + FIELD_API_KEY + ", " + FIELD_DIMENSION + ", " + FIELD_TIMEOUT + ", " + FIELD_BATCH_SIZE + ", "
-                + FIELD_UPDATED_AT + ") VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) "
+                + FIELD_API_KEY + ", " + FIELD_DIMENSION + ", " + FIELD_TIMEOUT + ", " + FIELD_BATCH_SIZE + ", " + FIELD_IS_DEFAULT + ", "
+                + FIELD_UPDATED_AT + ") VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) "
                 + "ON CONFLICT (" + FIELD_NAME + ", " + FIELD_VERSION + ") DO UPDATE SET "
                 + FIELD_PROVIDER + "=EXCLUDED." + FIELD_PROVIDER + ", "
                 + FIELD_URL + "=EXCLUDED." + FIELD_URL + ", "
@@ -108,9 +101,10 @@ public class PostgresEmbeddingModelStore implements EmbeddingModelStore {
                 + FIELD_DIMENSION + "=EXCLUDED." + FIELD_DIMENSION + ", "
                 + FIELD_TIMEOUT + "=EXCLUDED." + FIELD_TIMEOUT + ", "
                 + FIELD_BATCH_SIZE + "=EXCLUDED." + FIELD_BATCH_SIZE + ", "
+                + FIELD_IS_DEFAULT + "=EXCLUDED." + FIELD_IS_DEFAULT + ", "
                 + FIELD_UPDATED_AT + "=CURRENT_TIMESTAMP",
                 config.getName(), config.getVersion(), config.getProvider(), config.getUrl(),
-                config.getApiKey(), config.getDimension(), config.getTimeoutMillis(), config.getBatchSize());
+                config.getApiKey(), config.getDimension(), config.getTimeoutMillis(), config.getBatchSize(), config.isDefault());
     }
 
     @Override
@@ -121,25 +115,16 @@ public class PostgresEmbeddingModelStore implements EmbeddingModelStore {
 
     @Override
     public void saveDefault(EmbeddingModelRef ref) {
-        if (ref == null) {
-            jdbc.update("DELETE FROM " + defaultTable + " WHERE " + FIELD_MARKER_ID + " = ?", DEFAULT_MARKER_ID);
-            return;
+        jdbc.update("UPDATE " + modelTable + " SET " + FIELD_IS_DEFAULT + " = FALSE");
+        if (ref != null) {
+            jdbc.update("UPDATE " + modelTable + " SET " + FIELD_IS_DEFAULT + " = TRUE WHERE " + FIELD_NAME + " = ? AND " + FIELD_VERSION + " = ?", ref.name(), ref.version());
         }
-        jdbc.update("INSERT INTO " + defaultTable + " ("
-                + FIELD_MARKER_ID + ", " + FIELD_DEFAULT_NAME + ", " + FIELD_DEFAULT_VERSION + ") "
-                + "VALUES (?,?,?) ON CONFLICT (" + FIELD_MARKER_ID + ") DO UPDATE SET "
-                + FIELD_DEFAULT_NAME + "=EXCLUDED." + FIELD_DEFAULT_NAME + ", "
-                + FIELD_DEFAULT_VERSION + "=EXCLUDED." + FIELD_DEFAULT_VERSION,
-                DEFAULT_MARKER_ID, ref.name(), ref.version());
     }
 
     @Override
     public EmbeddingModelRef loadDefault() {
-        List<EmbeddingModelRef> rows = jdbc.query("SELECT " + FIELD_DEFAULT_NAME + ", " + FIELD_DEFAULT_VERSION
-                + " FROM " + defaultTable + " WHERE " + FIELD_MARKER_ID + " = ?",
-                (rs, rowNum) -> new EmbeddingModelRef(rs.getString(FIELD_DEFAULT_NAME),
-                        rs.getString(FIELD_DEFAULT_VERSION)),
-                DEFAULT_MARKER_ID);
+        List<EmbeddingModelRef> rows = jdbc.query("SELECT " + FIELD_NAME + ", " + FIELD_VERSION + " FROM " + modelTable + " WHERE " + FIELD_IS_DEFAULT + " = TRUE",
+                (rs, rowNum) -> new EmbeddingModelRef(rs.getString(FIELD_NAME), rs.getString(FIELD_VERSION)));
         return rows.isEmpty() ? null : rows.get(0);
     }
 

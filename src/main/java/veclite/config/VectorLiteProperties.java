@@ -143,7 +143,8 @@ public class VectorLiteProperties {
     }
 
     public static class StorageConfig {
-        private StorageType type = StorageType.SNAPSHOT_FILE;
+        /** 数据库是运行时唯一支持的持久化后端；默认使用 PostgreSQL。 */
+        private StorageType type = StorageType.POSTGRES;
         private SnapshotFileConfig snapshotFile = new SnapshotFileConfig();
         private OffHeapConfig offHeap = new OffHeapConfig();
         private PayloadConfig payload = new PayloadConfig();
@@ -203,7 +204,6 @@ public class VectorLiteProperties {
     public static class MongoConfig {
         private String uri = "mongodb://localhost:27017";
         private String database = "veclite";
-        private String documentCollection = "veclite_document";
         private String metaCollection = "veclite_store_meta";
         private String embeddingModelCollection = "veclite_embedding_model";
         private int scanBatchSize = 1000;
@@ -222,14 +222,6 @@ public class VectorLiteProperties {
 
         public void setDatabase(String database) {
             this.database = database;
-        }
-
-        public String getDocumentCollection() {
-            return documentCollection;
-        }
-
-        public void setDocumentCollection(String documentCollection) {
-            this.documentCollection = documentCollection;
         }
 
         public String getMetaCollection() {
@@ -262,7 +254,6 @@ public class VectorLiteProperties {
         private String jdbcUrl = "jdbc:postgresql://localhost:5432/veclite";
         private String username = "postgres";
         private String password = "";
-        private String documentTable = "veclite_document";
         private String metaTable = "veclite_store_meta";
         private String embeddingModelTable = "veclite_embedding_model";
 
@@ -291,14 +282,6 @@ public class VectorLiteProperties {
 
         public void setPassword(String password) {
             this.password = password;
-        }
-
-        public String getDocumentTable() {
-            return documentTable;
-        }
-
-        public void setDocumentTable(String documentTable) {
-            this.documentTable = documentTable;
         }
 
         public String getMetaTable() {
@@ -412,6 +395,7 @@ public class VectorLiteProperties {
         private int dimension = 0;
         private int timeoutMillis = 1000;
         private int batchSize = 1;
+        private boolean isDefault;
 
         public String getName() {
             return name;
@@ -476,6 +460,9 @@ public class VectorLiteProperties {
         public void setBatchSize(int batchSize) {
             this.batchSize = batchSize;
         }
+
+        public boolean isDefault() { return isDefault; }
+        public void setDefault(boolean value) { this.isDefault = value; }
     }
 
     public static class StoreConfig {

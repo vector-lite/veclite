@@ -20,11 +20,17 @@ const modal = () => document.getElementById('modal');
 /**
  * 打开内容弹窗。content 为 DOM 节点；footer 按钮回调后自动关闭（返回 false 除外）。
  */
-export function openModal({ title, content, footer = [] }) {
+export function openModal({ title, content, footer = [], closeOnBackdrop = true }) {
   const dialog = modal();
   dialog.innerHTML = '';
   if (title) {
-    dialog.appendChild(el(`<div class="modal-header">${escapeHtml(title)}</div>`));
+    const header = el(`
+      <div class="modal-header" style="display:flex;align-items:center;justify-content:space-between">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${escapeHtml(title)}</span>
+        <button class="btn btn-icon" data-modal-close style="margin:-4px -8px -4px 8px;padding:2px 6px;color:var(--fg-muted)" title="关闭">✕</button>
+      </div>`);
+    header.querySelector('[data-modal-close]').addEventListener('click', () => dialog.close());
+    dialog.appendChild(header);
   }
   const body = el('<div class="modal-body"></div>');
   body.appendChild(content);
@@ -41,6 +47,20 @@ export function openModal({ title, content, footer = [] }) {
     }
     dialog.appendChild(bar);
   }
+
+  dialog.onclick = (event) => {
+    if (closeOnBackdrop && event.target === dialog) {
+      const rect = dialog.getBoundingClientRect();
+      const isInside = (
+        rect.top <= event.clientY &&
+        event.clientY <= rect.bottom &&
+        rect.left <= event.clientX &&
+        event.clientX <= rect.right
+      );
+      if (!isInside) dialog.close();
+    }
+  };
+
   dialog.returnValue = '';
   dialog.showModal();
   return dialog;
@@ -125,4 +145,34 @@ export function truncate(text, max = 120) {
 
 export function prettyJson(value) {
   return JSON.stringify(value, null, 2);
+}
+
+export async function copyToClipboard(text, successMsg = '已复制到剪贴板') {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      toast(successMsg);
+      return true;
+    }
+  } catch { /* fallback */ }
+
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    if (ok) {
+      toast(successMsg);
+      return true;
+    }
+  } catch { /* ignore */ }
+
+  toast('复制失败，请手动选择复制', true);
+  return false;
 }

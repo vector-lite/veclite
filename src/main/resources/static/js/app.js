@@ -1,6 +1,6 @@
-import { renderStores } from './views/stores.js';
-import { renderStore } from './views/store.js';
-import { renderSettings } from './views/settings.js';
+import { renderStores } from './views/stores.js?v=2.5.1';
+import { renderStore } from './views/store.js?v=2.5.1';
+import { renderSettings } from './views/settings.js?v=2.5.1';
 import { el, toast, escapeHtml } from './ui.js';
 
 const app = document.getElementById('app');

@@ -179,8 +179,7 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
             int to = Math.min(from + DELETE_CHUNK_SIZE, documentIds.size());
             List<String> chunk = documentIds.subList(from, to);
             String placeholders = String.join(",", Collections.nCopies(chunk.size(), "?"));
-            Object[] args = new Object[chunk.size() + 1];
-            System.arraycopy(chunk.toArray(), 0, args, 0, chunk.size());
+            Object[] args = chunk.toArray();
             deleted += jdbc.update("DELETE FROM \"" + handle(storeName).physicalName()
                     + "\" WHERE " + FIELD_DOC_ID + " IN (" + placeholders + ")", args);
         }

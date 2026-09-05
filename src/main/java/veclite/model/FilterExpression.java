@@ -14,7 +14,9 @@ public class FilterExpression implements Serializable {
         EQ,
         IN,
         GT,
-        LT
+        LT,
+        AND,
+        OR
     }
 
     @Schema(description = "Metadata field name to filter on", example = "category")
@@ -28,6 +30,9 @@ public class FilterExpression implements Serializable {
 
     @Schema(description = "Values for IN operator")
     private List<Object> values;
+
+    @Schema(description = "Child expressions for AND/OR operators")
+    private List<FilterExpression> children;
 
     public FilterExpression() {}
 
@@ -43,6 +48,21 @@ public class FilterExpression implements Serializable {
         return expr;
     }
 
+    public static FilterExpression and(FilterExpression... children) {
+        return compound(Operator.AND, children);
+    }
+
+    public static FilterExpression or(FilterExpression... children) {
+        return compound(Operator.OR, children);
+    }
+
+    private static FilterExpression compound(Operator operator, FilterExpression... children) {
+        FilterExpression expr = new FilterExpression();
+        expr.operator = operator;
+        expr.children = children == null ? List.of() : List.of(children);
+        return expr;
+    }
+
     public String getField() { return field; }
     public void setField(String field) { this.field = field; }
     public Operator getOperator() { return operator; }
@@ -51,4 +71,6 @@ public class FilterExpression implements Serializable {
     public void setValue(Object value) { this.value = value; }
     public List<Object> getValues() { return values; }
     public void setValues(List<Object> values) { this.values = values; }
+    public List<FilterExpression> getChildren() { return children; }
+    public void setChildren(List<FilterExpression> children) { this.children = children; }
 }

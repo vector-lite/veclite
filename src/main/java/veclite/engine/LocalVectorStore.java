@@ -3,6 +3,7 @@ package veclite.engine;
 import veclite.api.VectorStoreDefinition;
 import veclite.config.VectorLiteProperties;
 import veclite.math.PureJavaVectorMath;
+import veclite.math.ScoreExpressionEvaluator;
 import veclite.math.VectorMath;
 import veclite.model.*;
 import veclite.quantization.SQ8Quantizer;
@@ -373,9 +374,41 @@ public class LocalVectorStore {
         Float minScore = request.getMinScore();
         String metric = definition.getMetric();
         FilterExpression filter = request.getFilter();
+        boolean normalizeScore = Boolean.TRUE.equals(request.getNormalizeScore());
+        String scoreExpression = request.getScoreExpression();
+        boolean hasExpression = scoreExpression != null && !scoreExpression.trim().isEmpty();
 
         boolean isEuclidean = "EUCLIDEAN".equalsIgnoreCase(metric) || "L2".equalsIgnoreCase(metric);
         boolean isDotProduct = "DOT_PRODUCT".equalsIgnoreCase(metric) || "IP".equalsIgnoreCase(metric);
+
+        ScoreExpressionEvaluator.ScoreFunction scoreFunction = null;
+        if (hasExpression) {
+            scoreFunction = ScoreExpressionEvaluator.compile(scoreExpression);
+        } else if (normalizeScore) {
+            scoreFunction = isEuclidean
+                    ? (s -> Math.max(0.0f, Math.min(1.0f, 1.0f / (1.0f + Math.max(0.0f, s)))))
+                    : (s -> Math.max(0.0f, Math.min(1.0f, (1.0f + s) / 2.0f)));
+        }
+
+        Float effectiveMinScore = minScore;
+        Float postMinScore = null;
+        if (hasExpression) {
+            // 自定义表达式无法预知单调性，因此扫描时不预过滤，在 buildResults 中按计算后的 finalScore 过滤
+            effectiveMinScore = null;
+            postMinScore = minScore;
+        } else if (normalizeScore && minScore != null) {
+            if (isEuclidean) {
+                if (minScore <= 0.0f) {
+                    effectiveMinScore = Float.MAX_VALUE;
+                } else if (minScore >= 1.0f) {
+                    effectiveMinScore = 0.0f;
+                } else {
+                    effectiveMinScore = (1.0f / minScore) - 1.0f;
+                }
+            } else {
+                effectiveMinScore = minScore * 2.0f - 1.0f;
+            }
+        }
 
         // 三种扫描模式：Float32 缓冲区 / SQ8 量化缓冲区 / SQ8 校准期 Float32 暂存区。
         // 所有可变状态在入口处一次性捕获为局部快照引用，
@@ -415,17 +448,17 @@ public class LocalVectorStore {
                 && totalCount >= properties.getSearcher().getParallel().getMinVectorCount();
 
         if (enableParallel) {
-            return searchParallel(queryVector, topK, minScore, metric, filter, isEuclidean, isDotProduct,
-                    totalCount, sq8Scan, warmupScan, queryNormSq, queryNormInv, calibSnapshot);
+            return searchParallel(queryVector, topK, effectiveMinScore, metric, filter, isEuclidean, isDotProduct,
+                    totalCount, sq8Scan, warmupScan, queryNormSq, queryNormInv, calibSnapshot, scoreFunction, postMinScore);
         }
 
         if (!sq8Enabled && vectorBuffer != null) {
             vectorBuffer.acquireReadLock();
         }
         try {
-            List<TopKCandidate> candidates = doSearch(queryVector, topK, minScore, metric, filter, isEuclidean, isDotProduct,
+            List<TopKCandidate> candidates = doSearch(queryVector, topK, effectiveMinScore, metric, filter, isEuclidean, isDotProduct,
                     0, totalCount, sq8Scan, warmupScan, queryNormSq, queryNormInv, calibSnapshot, null);
-            return buildResults(candidates);
+            return buildResults(candidates, scoreFunction, postMinScore);
         } finally {
             if (!sq8Enabled && vectorBuffer != null) {
                 vectorBuffer.releaseReadLock();
@@ -438,7 +471,9 @@ public class LocalVectorStore {
                                                     boolean isEuclidean, boolean isDotProduct, int totalCount,
                                                     boolean sq8Scan, boolean warmupScan,
                                                     float queryNormSq, float queryNormInv,
-                                                    float[] calibSnapshot) {
+                                                    float[] calibSnapshot,
+                                                    ScoreExpressionEvaluator.ScoreFunction scoreFunction,
+                                                    Float postMinScore) {
         int threads = properties.getSearcher().getParallel().getThreads();
         ExecutorService executor = ParallelSearchExecutor.getExecutor(threads);
 
@@ -473,7 +508,7 @@ public class LocalVectorStore {
                 }
             }
 
-            return buildResults(pollAll(globalHeap));
+            return buildResults(pollAll(globalHeap), scoreFunction, postMinScore);
         } catch (Exception e) {
             throw new RuntimeException("Parallel search failed: " + e.getMessage(), e);
         } finally {
@@ -587,15 +622,24 @@ public class LocalVectorStore {
         return results;
     }
 
-    private List<VectorSearchResult> buildResults(List<TopKCandidate> candidates) {
+    private List<VectorSearchResult> buildResults(List<TopKCandidate> candidates,
+                                                  ScoreExpressionEvaluator.ScoreFunction scoreFunction,
+                                                  Float postMinScore) {
         List<VectorSearchResult> results = new ArrayList<>(candidates.size());
         for (int i = candidates.size() - 1; i >= 0; i--) {
             TopKCandidate cand = candidates.get(i);
+            float finalScore = cand.score;
+            if (scoreFunction != null) {
+                finalScore = scoreFunction.evaluate(finalScore);
+            }
+            if (postMinScore != null && finalScore < postMinScore) {
+                continue;
+            }
             DocumentPayload payload = payloadStorage.get(cand.offset);
             String id = payload != null ? payload.getId() : idOffsetIndex.getId(cand.offset);
             String text = payload != null ? payload.getText() : null;
             Map<String, Object> metadata = payload != null ? payload.getMetadata() : null;
-            results.add(new VectorSearchResult(id, cand.score, text, metadata));
+            results.add(new VectorSearchResult(id, finalScore, text, metadata));
         }
         return results;
     }
@@ -731,22 +775,50 @@ public class LocalVectorStore {
     }
 
     private boolean matchesFilter(Map<String, Object> metadata, FilterExpression filter) {
-        if (filter == null || filter.getField() == null) {
+        if (filter == null) {
             return true;
+        }
+        FilterExpression.Operator operator = filter.getOperator();
+        if (operator == FilterExpression.Operator.AND || operator == FilterExpression.Operator.OR) {
+            List<FilterExpression> children = filter.getChildren();
+            if (children == null || children.isEmpty()) return false;
+            if (operator == FilterExpression.Operator.AND) {
+                for (FilterExpression child : children) {
+                    if (!matchesFilter(metadata, child)) return false;
+                }
+                return true;
+            }
+            for (FilterExpression child : children) {
+                if (matchesFilter(metadata, child)) return true;
+            }
+            return false;
+        }
+        if (filter.getField() == null || operator == null) {
+            return false;
         }
         if (metadata == null) {
             return false;
         }
         Object metaValue = metadata.get(filter.getField());
-        if (filter.getOperator() == FilterExpression.Operator.EQ) {
+        if (operator == FilterExpression.Operator.EQ) {
+            if (metaValue instanceof Collection<?> coll) {
+                return coll.contains(filter.getValue());
+            }
             return Objects.equals(metaValue, filter.getValue());
-        } else if (filter.getOperator() == FilterExpression.Operator.IN) {
+        } else if (operator == FilterExpression.Operator.IN) {
             List<Object> values = filter.getValues();
-            return values != null && values.contains(metaValue);
-        } else if (filter.getOperator() == FilterExpression.Operator.GT
-                || filter.getOperator() == FilterExpression.Operator.LT) {
+            if (values == null) return false;
+            if (metaValue instanceof Collection<?> coll) {
+                for (Object item : coll) {
+                    if (values.contains(item)) return true;
+                }
+                return false;
+            }
+            return values.contains(metaValue);
+        } else if (operator == FilterExpression.Operator.GT
+                || operator == FilterExpression.Operator.LT) {
             return compareNumeric(metaValue, filter.getValue())
-                    == (filter.getOperator() == FilterExpression.Operator.GT
+                    == (operator == FilterExpression.Operator.GT
                             ? 1 : -1);
         }
         return true;
@@ -921,6 +993,9 @@ public class LocalVectorStore {
                 payloadStorage.close();
             } catch (Exception ignored) {
             }
+        }
+        if (offHeapSQ8Buffer != null) {
+            offHeapSQ8Buffer.close();
         }
     }
 }

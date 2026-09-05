@@ -30,7 +30,7 @@ public class SnapshotFileStorageTest {
         store.upsert(new VectorDocument("d1", new float[]{1.0f, 2.0f}, "text1", new HashMap<>()));
         store.upsert(new VectorDocument("d2", new float[]{3.0f, 4.0f}, "text2", new HashMap<>()));
 
-        storage.saveStore(store);
+        storage.flushSnapshot(store);
 
         LocalVectorStore loadedStore = new LocalVectorStore(def);
         storage.loadStore(loadedStore);

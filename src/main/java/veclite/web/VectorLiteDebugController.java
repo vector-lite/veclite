@@ -222,12 +222,11 @@ public class VectorLiteDebugController {
         return success();
     }
 
-    @Operation(summary = "Reconcile the truth source against in-memory data (repair missing/stale rows only)")
-    @PostMapping("/stores/{storeName}/refresh")
-    public Map<String, String> refresh(
+    @Operation(summary = "Reconcile the truth source against in-memory data; returns the reconcile diff (repaired/stale counts with sample IDs)")
+    @PostMapping("/stores/{storeName}/reconcile")
+    public ReconcileResult reconcile(
             @Parameter(description = "Store name") @PathVariable String storeName) {
-        client.refresh(storeName);
-        return success();
+        return client.reconcileStore(storeName);
     }
 
     @Operation(summary = "Incrementally sync changes from the truth source since the last watermark")

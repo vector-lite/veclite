@@ -145,14 +145,14 @@ public class BugFixRegressionTest {
             vectors.add(v);
             store.upsert(new VectorDocument("d" + i, v, "text-" + i, new HashMap<>()));
         }
-        storage.saveStore(store);
+        storage.flushSnapshot(store);
 
         // 连续两次快照往返，验证无精度累积衰减
         LocalVectorStore loaded1 = new LocalVectorStore(def);
         storage.loadStore(loaded1);
         assertTrue(loaded1.isSQ8Frozen(), "加载后应直接处于冻结状态");
 
-        storage.saveStore(loaded1);
+        storage.flushSnapshot(loaded1);
         LocalVectorStore loaded2 = new LocalVectorStore(def);
         storage.loadStore(loaded2);
 
@@ -226,7 +226,7 @@ public class BugFixRegressionTest {
             meta.put("k", "old_" + i);
             store.upsert(new VectorDocument("saved_" + i, normVec(4, 0.2f * (i + 1)), "t", meta));
         }
-        storage.saveStore(store);
+        storage.flushSnapshot(store);
 
         // 刷盘后又写入两条未持久化的文档
         for (int i = 0; i < 2; i++) {

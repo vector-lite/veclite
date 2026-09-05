@@ -14,7 +14,7 @@ package veclite.engine;
  * 已经产生了错位状态。此时落盘只会把脏数据固化下来，
  * 启动加载后仍然是脏的——必须 Fail-Fast 阻止落盘。
  *
- * <p>调用时机：快照类持久化实现的 {@code saveStore} 落盘前、启动装载到内存后。
+ * <p>调用时机：快照类持久化实现的 {@code flushSnapshot} 落盘前、启动装载到内存后。
  */
 public final class LocalVectorStoreAssertions {
 

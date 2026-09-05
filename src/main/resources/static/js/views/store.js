@@ -40,8 +40,9 @@ export async function renderStore(container, storeName, tab = 'documents') {
         </div>
       </div>
       <div style="display:flex;gap:6px">
-        <button class="btn" data-op="refresh" title="将内存数据刷盘持久化">${icons.download()} 刷盘</button>
-        <button class="btn" data-op="reload" title="从持久化数据重载内存">${icons.upload()} 重载</button>
+        <button class="btn" data-op="sync" title="按水位从真相源拉取增量变更应用到内存（多节点部署下由调度器定时执行）">${icons.download()} 增量同步</button>
+        <button class="btn" data-op="reconcile" title="以内存为权威修复真相源漂移：补齐缺失行、软删滞留行">${icons.download()} 对账修复</button>
+        <button class="btn" data-op="reload" title="从真相源全量重建内存，并建立增量同步水位基线">${icons.upload()} 重载</button>
         <button class="btn btn-danger" data-op="drop">${icons.trash()} 删除</button>
       </div>
     </div>
@@ -59,10 +60,28 @@ export async function renderStore(container, storeName, tab = 'documents') {
   const body = el('<div></div>');
   container.appendChild(body);
 
-  container.querySelector('[data-op=refresh]').addEventListener('click', async () => {
-    try { await api.refresh(storeName); toast('已刷盘'); } catch (e) { toast(e.message, true); }
+  container.querySelector('[data-op=sync]').addEventListener('click', async () => {
+    try {
+      const result = await api.sync(storeName);
+      showSyncResult(storeName, result);
+    } catch (e) { toast(e.message, true); }
+  });
+  container.querySelector('[data-op=reconcile]').addEventListener('click', async () => {
+    const ok = await confirmModal(
+      `对账将以「${storeName}」的内存数据为权威修复真相源：补齐缺失行、软删滞留行。多节点部署下请确认本节点内存是最新权威。`,
+      { okLabel: '执行对账' });
+    if (!ok) return;
+    try {
+      const result = await api.reconcile(storeName);
+      showReconcileResult(storeName, result);
+      renderStore(container, storeName, tab);
+    } catch (e) { toast(e.message, true); }
   });
   container.querySelector('[data-op=reload]').addEventListener('click', async () => {
+    const ok = await confirmModal(
+      `重载将清空「${storeName}」内存并从真相源全量重建（大库耗时数秒），完成后建立增量同步水位基线。`,
+      { okLabel: '重载' });
+    if (!ok) return;
     try {
       await api.reload(storeName);
       toast('已重载');
@@ -84,6 +103,55 @@ export async function renderStore(container, storeName, tab = 'documents') {
   } else {
     await renderDocuments(body, storeName, stats);
   }
+}
+
+/* ================= 数据一致性结果展示 ================= */
+
+/** 把后端 Instant（ISO 字符串）转成本地可读时间；空值显示占位符 */
+function formatWatermark(instant) {
+  if (!instant) return '—';
+  const date = new Date(instant);
+  return isNaN(date) ? escapeHtml(instant) : date.toLocaleString();
+}
+
+/** 弹窗展示增量同步结果（StoreSyncResult：appliedUpserts / appliedDeletes / watermark） */
+function showSyncResult(storeName, result) {
+  const content = el(`
+    <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
+      <div>向量库「${escapeHtml(storeName)}」本次从真相源应用的增量：</div>
+      <div style="display:flex;gap:16px">
+        <span class="pill pill-success">新增/更新 ${result.appliedUpserts} 条</span>
+        <span class="pill ${result.appliedDeletes ? 'pill-warn' : ''}">删除 ${result.appliedDeletes} 条</span>
+        <span class="pill">水位推进到 ${formatWatermark(result.watermark)}</span>
+      </div>
+      <div style="color:var(--fg-muted)">两项均为 0 说明内存与真相源在本水位内一致，无需处理。</div>
+    </div>`);
+  openModal({ title: '增量同步结果', content, footer: [{ label: '关闭' }] });
+}
+
+/** 弹窗展示集合级对账结果（ReconcileResult：双向修复条数、样本 ID、耗时） */
+function showReconcileResult(storeName, result) {
+  const sampleList = (ids, color) => !ids || !ids.length
+    ? '<div style="color:var(--fg-muted)">无</div>'
+    : `<div style="max-height:140px;overflow:auto"><code style="font-size:12px;color:${color}">${ids.map(escapeHtml).join('<br>')}</code></div>`;
+  const match = result.memoryActiveCount === result.truthActiveCount;
+  const content = el(`
+    <div style="display:flex;flex-direction:column;gap:10px;font-size:13px">
+      <div style="display:flex;gap:16px">
+        <span class="pill">内存 ${result.memoryActiveCount} 条</span>
+        <span class="pill ${match ? 'pill-success' : 'pill-warn'}">真相源 ${result.truthActiveCount} 条${match ? '（已一致）' : '（未对齐，重进页面刷新统计）'}</span>
+        <span class="pill">耗时 ${result.durationMillis} ms</span>
+      </div>
+      <div>
+        <div style="margin-bottom:4px">补齐真相源缺失：<b>${result.missingUpserted}</b> 条，样本：</div>
+        ${sampleList(result.missingSamples, 'var(--ok, #2e7d32)')}
+      </div>
+      <div>
+        <div style="margin-bottom:4px">软删真相源滞留行：<b>${result.staleSoftDeleted}</b> 条，样本：</div>
+        ${sampleList(result.staleSamples, 'var(--warn, #b26a00)')}
+      </div>
+    </div>`);
+  openModal({ title: '对账修复结果', content, footer: [{ label: '关闭' }] });
 }
 
 /* ================= 文档数据 ================= */
@@ -351,7 +419,6 @@ async function renderDocuments(container, storeName, stats) {
     });
   }
 
-  async function refreshStats() { /* 条数以重进页面后的 stats 为准，这里仅触发表格刷新 */ }
 
   async function insertDocDialog() {
     const values = await formModal({

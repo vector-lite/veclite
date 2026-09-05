@@ -42,10 +42,14 @@ public interface VectorEngineClient {
     }
 
     /**
-     * 以内存为权威对真相源做集合级对账：补齐真相源缺失的文档、软删滞留行、同步元数据。
-     * 不重写双方已一致的文档（写透路径下内存与真相源本就一致，无需周期性调用）。
+     * 集合级对账：以内存为权威对真相源做一致性修复——补齐真相源缺失的文档、软删滞留行、
+     * 同步元数据，返回对账 diff 明细（修复条数、样本 ID 与耗时）。
+     * 不重写双方已一致的文档（写透路径下内存与真相源本就一致，这是运维修复工具而非周期任务）。
+     * 默认实现抛出 UnsupportedOperationException，由文档型持久化的具体实现类覆写。
      */
-    void refresh(String storeName);
+    default ReconcileResult reconcileStore(String storeName) {
+        throw new UnsupportedOperationException("reconcileStore requires a document-backed persistence backend");
+    }
 
     /**
      * 全量重建：重置内存后从真相源整库装载，并建立增量同步水位基线。

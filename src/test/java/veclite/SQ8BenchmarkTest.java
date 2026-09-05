@@ -12,7 +12,6 @@ import veclite.model.QuantizationType;
 import veclite.model.StorageType;
 import veclite.model.VectorDocument;
 import veclite.persistence.SnapshotFileStorage;
-import veclite.persistence.VectorPersistenceStorage;
 
 import java.io.File;
 import java.util.*;
@@ -54,7 +53,7 @@ public class SQ8BenchmarkTest {
         properties.getSearcher().getParallel().setEnabled(false);
 
         LocalVectorEngine engine = new LocalVectorEngine(properties);
-        VectorPersistenceStorage storage = new SnapshotFileStorage(properties);
+        SnapshotFileStorage storage = new SnapshotFileStorage(properties);
         VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, storage, properties, null);
 
         runGC();
@@ -162,7 +161,7 @@ public class SQ8BenchmarkTest {
             // 快照刷盘
             System.out.printf("  正在刷盘保存快照...%n");
             long flushStart = System.currentTimeMillis();
-            client.refresh(storeName);
+            storage.flushSnapshot(engine.getStore(storeName));
             long flushTimeMs = System.currentTimeMillis() - flushStart;
             System.out.printf("  快照刷盘耗时: %,d ms (%.2f 秒)%n%n", flushTimeMs, flushTimeMs / 1000.0);
 

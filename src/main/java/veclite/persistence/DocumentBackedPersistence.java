@@ -1,6 +1,7 @@
 package veclite.persistence;
 
 import veclite.engine.LocalVectorStore;
+import veclite.model.ReconcileResult;
 import veclite.model.StoreSyncResult;
 import veclite.model.VectorDocument;
 import veclite.api.VectorStoreMetadata;
@@ -30,6 +31,14 @@ public interface DocumentBackedPersistence extends VectorPersistenceStorage {
 
     /** 保存/更新 Store 元数据（定义配置、SQ8 冻结参数、activeCount、同步水位） */
     void saveStoreMetadata(LocalVectorStore store);
+
+    /**
+     * 集合级对账：以内存有效文档集合为权威修复真相源漂移——补齐真相源缺失的文档、
+     * 软删真相源中内存已不存在的滞留行、同步元数据，返回对账 diff 明细。
+     * 写透路径下内存与真相源本就一致，这是运维修复工具而非周期性任务；
+     * 多节点部署下对账意味着"本节点内存为权威"，应由运维显式触发。
+     */
+    ReconcileResult reconcileStore(LocalVectorStore store);
 
     /**
      * 增量同步：按元数据水位拉取真相源变更并应用到内存，返回应用统计与推进后的水位。

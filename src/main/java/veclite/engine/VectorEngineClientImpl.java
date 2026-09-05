@@ -341,13 +341,16 @@ public class VectorEngineClientImpl implements VectorEngineClient {
     }
 
     /**
-     * 以内存为权威对真相源做集合级对账（补缺失文档、软删滞留行、同步元数据）。
-     * 写透路径下内存与真相源本就一致，这是运维修复工具而非周期性任务。
+     * 以内存为权威对真相源做集合级对账（补缺失文档、软删滞留行、同步元数据），
+     * 返回对账 diff 明细。写透路径下内存与真相源本就一致，这是运维修复工具而非周期性任务。
      */
     @Override
-    public void refresh(String storeName) {
+    public ReconcileResult reconcileStore(String storeName) {
         LocalVectorStore store = localVectorEngine.getStore(storeName);
-        persistence.saveStore(store);
+        if (documentPersistence == null) {
+            throw new UnsupportedOperationException("reconcileStore requires a document-backed persistence backend");
+        }
+        return documentPersistence.reconcileStore(store);
     }
 
     /**

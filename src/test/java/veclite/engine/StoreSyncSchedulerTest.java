@@ -13,7 +13,9 @@ import veclite.persistence.AbstractDocumentPersistence;
 import veclite.persistence.InMemoryVectorDocumentRepository;
 import veclite.persistence.VectorDocumentRepository;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -27,10 +29,22 @@ class StoreSyncSchedulerTest {
 
     private static final String STORE = "shared_store";
 
+    /**
+     * 可控时钟：增量同步按 updatedAt &gt; 水位 严格比较，真实时钟在同一瞬间内
+     * 取值可能撞车导致写入被跳过（偶发失败）。测试统一使用可手动推进的时钟，
+     * 写入前先推进一秒，保证写入时间严格晚于基线。
+     */
+    private static InMemoryVectorDocumentRepository steppedClockRepository() {
+        InMemoryVectorDocumentRepository repository = new InMemoryVectorDocumentRepository();
+        AtomicReference<Instant> clock = new AtomicReference<>(Instant.now());
+        repository.clock = () -> clock.updateAndGet(i -> i.plusSeconds(1));
+        return repository;
+    }
+
     @Test
     @DisplayName("多节点收敛：对端写透的 upsert 与删除经增量同步应用到本节点内存")
     void incrementalSyncConvergesPeerWrites() {
-        InMemoryVectorDocumentRepository repository = new InMemoryVectorDocumentRepository();
+        InMemoryVectorDocumentRepository repository = steppedClockRepository();
         VectorLiteProperties properties = new VectorLiteProperties();
         properties.getStorage().setType(StorageType.POSTGRES);
 
@@ -61,7 +75,7 @@ class StoreSyncSchedulerTest {
     @Test
     @DisplayName("调度器 runOnce：逐 Store 同步，单库失败不中断其余库")
     void runOnceSyncsEveryStoreAndToleratesFailures() {
-        InMemoryVectorDocumentRepository repository = new InMemoryVectorDocumentRepository();
+        InMemoryVectorDocumentRepository repository = steppedClockRepository();
         VectorLiteProperties properties = new VectorLiteProperties();
         properties.getStorage().setType(StorageType.POSTGRES);
 

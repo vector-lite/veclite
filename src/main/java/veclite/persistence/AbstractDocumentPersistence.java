@@ -3,6 +3,7 @@ package veclite.persistence;
 import veclite.api.VectorStoreDefinition;
 import veclite.api.VectorStoreMetadata;
 import veclite.engine.LocalVectorStore;
+import veclite.model.ReconcileResult;
 import veclite.model.StoreSyncResult;
 import veclite.model.VectorDocument;
 import veclite.config.VectorLiteProperties;
@@ -31,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li><b>写透</b>（{@link #upsertDocuments}）：写路径先提交真相源（RPO=0），成功后再更新内存；</li>
  *   <li><b>整库装载</b>（{@link #loadStore}）：重置内存后从真相源游标式全量重建，
  *       并以装载开始时间建立增量同步水位基线；</li>
- *   <li><b>集合级对账</b>（{@link #saveStore}）：以内存为权威按 docId 集合差修复真相源
+ *   <li><b>集合级对账</b>（{@link #reconcileStore}）：以内存为权威按 docId 集合差修复真相源
  *       （补缺失文档、软删滞留行），<b>不重写已一致的文档</b>——SQ8 库因此不会把真相源中的
  *       原始 Float32 向量覆盖为反量化近似值；仅对真相源缺失的文档以内存可得值（SQ8 库为
  *       反量化结果，属修复场景下的最优可得近似）落库；</li>
@@ -72,26 +73,33 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
 
     /**
      * 集合级对账：以内存有效文档集合为权威修复真相源漂移——把真相源缺失的文档补齐，
-     * 软删真相源中内存已不存在的滞留行，最后同步 Store 元数据。
+     * 软删真相源中内存已不存在的滞留行，最后同步 Store 元数据，返回对账 diff 明细
+     * （两个方向的修复条数、样本 ID 与耗时，供管理侧展示）。
      * 已在双方一致的文档不做任何写入，因此 SQ8 Store 的真相源原始 Float32 向量不会被
      * 反量化近似值覆盖；对账不比对文档内容，内容级漂移用 {@link #loadStore} 全量重建修复。
      * 多节点部署下对账意味着"本节点内存为权威"，应由运维显式触发而非定时执行。
      */
     @Override
-    public synchronized void saveStore(LocalVectorStore store) {
+    public synchronized ReconcileResult reconcileStore(LocalVectorStore store) {
         if (store == null) {
-            return;
+            throw new IllegalArgumentException("store must not be null");
         }
+        long startedAt = System.currentTimeMillis();
         String storeName = store.getDefinition().getStoreName();
         repository.ensureStore(storeName);
+        int memoryActiveCount = store.getActiveCount();
         Set<String> memoryIds = collectActiveDocumentIds(store);
 
         Set<String> truthIds = new HashSet<>(repository.listDocumentIds(storeName));
         int staleDeleted = 0;
+        List<String> staleSamples = new ArrayList<>();
         List<String> staleIds = new ArrayList<>(BATCH_SIZE);
         for (String truthId : truthIds) {
             if (!memoryIds.contains(truthId)) {
                 staleIds.add(truthId);
+                if (staleSamples.size() < ReconcileResult.MAX_SAMPLES) {
+                    staleSamples.add(truthId);
+                }
                 if (staleIds.size() >= BATCH_SIZE) {
                     repository.deleteByIds(storeName, staleIds);
                     staleDeleted += staleIds.size();
@@ -104,11 +112,18 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
             staleDeleted += staleIds.size();
         }
 
-        int repaired = upsertMissingDocuments(store, storeName, truthIds);
+        List<String> missingSamples = new ArrayList<>();
+        int repaired = upsertMissingDocuments(store, storeName, truthIds, missingSamples);
         saveStoreMetadata(store);
         purgeExpiredTombstones(storeName, true);
-        log.info("Reconciled store [{}]: {} missing documents upserted, {} stale documents soft-deleted",
-                storeName, repaired, staleDeleted);
+        long durationMillis = System.currentTimeMillis() - startedAt;
+        log.info("Reconciled store [{}]: {} missing documents upserted, {} stale documents soft-deleted in {} ms",
+                storeName, repaired, staleDeleted, durationMillis);
+        // listDocumentIds 只返回未软删行，truthIds.size() 即对账前真相源有效条数；
+        // 对账后有效条数 = 原有效 - 滞留软删 + 缺失补齐
+        int truthActiveCount = truthIds.size() - staleDeleted + repaired;
+        return ReconcileResult.of(memoryActiveCount, truthActiveCount,
+                repaired, staleDeleted, missingSamples, staleSamples, durationMillis);
     }
 
     /**
@@ -366,7 +381,8 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
      *
      * @return 实际补齐落库的文档数
      */
-    private int upsertMissingDocuments(LocalVectorStore store, String storeName, Set<String> truthIds) {
+    private int upsertMissingDocuments(LocalVectorStore store, String storeName, Set<String> truthIds,
+                                       List<String> missingSamples) {
         int dimension = store.getDefinition().getDimension();
         int totalCount = store.getVectorBufferSize();
         int repaired = 0;
@@ -379,6 +395,9 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
             LocalVectorStore.DocumentPayload payload = store.getDocumentPayloadAt(offset);
             if (payload == null || truthIds.contains(payload.getId())) {
                 continue;
+            }
+            if (missingSamples.size() < ReconcileResult.MAX_SAMPLES) {
+                missingSamples.add(payload.getId());
             }
             store.copyVectorFromBuffer(offset, tempVector);
             batch.add(VectorDocumentEntity.float32(payload.getId(), payload.getText(), payload.getMetadata(),

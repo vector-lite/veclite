@@ -230,7 +230,7 @@ class MongoVectorPersistenceManualTest {
                 new VectorDocument("q2", null, "quantized two", Map.of("k", "v2")),
                 new byte[]{-10, -20, 100, 5});
 
-        storage.saveStore(source);
+        storage.reconcileStore(source);
 
         assertArrayEquals(minPerDim, repository.findStoreMetadata(sq8Store).get().getSq8MinPerDim());
         assertArrayEquals(scalePerDim, repository.findStoreMetadata(sq8Store).get().getSq8ScalePerDim());
@@ -253,8 +253,8 @@ class MongoVectorPersistenceManualTest {
 
     @Test
     @Order(7)
-    @DisplayName("saveStore 集合级对账：软删真相源滞留行并同步 activeCount，已一致文档不重写")
-    void saveStoreShouldReconcileStaleRows() {
+    @DisplayName("reconcileStore 集合级对账：软删真相源滞留行并同步 activeCount，已一致文档不重写")
+    void reconcileStoreShouldReconcileStaleRows() {
         // 直接向真相源插入一条内存中不存在的滞留行
         repository.upsertBatch(STORE_NAME, List.of(
                 veclite.persistence.VectorDocumentEntity.float32(
@@ -262,7 +262,7 @@ class MongoVectorPersistenceManualTest {
         assertTrue(activeIds().contains("ghost"));
 
         LocalVectorStore store = new LocalVectorStore(definition(STORE_NAME, 4, QuantizationType.NONE), properties);
-        storage.saveStore(store);
+        storage.reconcileStore(store);
 
         // 滞留行被软删（tombstone 保留），活跃集合与内存 activeCount 一致
         assertTrue(scanEntity("ghost").isDeleted());

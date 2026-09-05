@@ -7,14 +7,14 @@
 - 生产环境通过 `veclite.storage.type` 选择 `MONGODB` 或 `POSTGRES`。
 - 文档、向量和 Store 元数据写入数据库；数据库是唯一真相源。
 - `VectorEngineClientImpl` 启动时从数据库发现 Store，并按主键分页重建内存索引。
-- upsert/delete 成功后立即写透数据库；`refresh` 仅用于整库对账，不依赖定时刷盘。
+- upsert/delete 成功后立即写透数据库；`reconcile` 仅用于运维触发的集合级对账，不依赖定时刷盘。
 
 ## 请求路由建议
 
-- create、upsert、delete、refresh 等写请求应由网关按 `storeName` 固定路由到同一写节点。
+- create、upsert、delete、reconcile 等以本节点内存为权威的写请求应由网关按 `storeName` 固定路由到同一写节点。
 - search、list、stats、reload 等读请求可路由到任一已完成数据库恢复的节点。
 - 节点本地的 `LocalVectorStore` 是查询热路径，查询不会为每个请求访问数据库。
-- 节点重启或副本落后时，通过 `reload` 从数据库重建；一致性边界由部署层的路由策略决定。
+- 节点重启或副本落后时，通过 `reload` 从数据库全量重建，日常收敛由增量同步（`syncStore`，按水位 diff）完成；一致性边界由部署层的路由策略决定。
 
 ## 资源与并发边界
 

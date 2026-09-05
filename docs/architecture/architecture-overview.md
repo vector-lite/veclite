@@ -137,7 +137,7 @@ graph LR
 
     subgraph External["外部"]
         PROPS["VectorLiteProperties<br/>（searcher/storage 配置）"]
-        PERS["VectorPersistenceStorage<br/>（refresh / reload）"]
+        PERS["VectorPersistenceStorage<br/>（reconcile / reload）"]
     end
 
     DEF -.维度/度量/量化.-> VB

@@ -94,15 +94,15 @@ flowchart LR
 
 ---
 
-## 图 3：持久化流程（refresh / reload）
+## 图 3：持久化流程（reconcile / reload）
 
 ```mermaid
 flowchart TD
-    subgraph Refresh["refresh（内存 → 磁盘）"]
-        R1["调用方 POST /stores/{name}/refresh"] --> R2["VectorEngineClientImpl.refresh"]
-        R2 --> R3["persistence.saveStore(store)"]
-        R3 --> R4["DocumentBackedPersistence.saveStore"]
-        R4 --> R5["数据库事务内批量 upsert 文档<br/>并更新 Store 元数据"]
+    subgraph Reconcile["reconcile（集合级对账，内存为权威）"]
+        R1["调用方 POST /stores/{name}/reconcile"] --> R2["VectorEngineClientImpl.reconcileStore"]
+        R2 --> R3["documentPersistence.reconcileStore(store)"]
+        R3 --> R4["按 docId 集合差修复真相源：<br/>补齐缺失行、软删滞留行"]
+        R4 --> R5["更新 Store 元数据，<br/>返回 ReconcileResult 对账明细"]
     end
 
     subgraph Reload["reload（磁盘 → 内存）"]
@@ -118,4 +118,4 @@ flowchart TD
 
 - **写透数据库**：文档 upsert/delete 成功即写入 MongoDB 或 PostgreSQL，避免本地快照刷盘窗口
 - **启动可恢复**：按主键分页读取数据库记录，重建向量、Payload 和过滤索引
-- **refresh 用于对账**：显式 refresh 触发整库批量对账，不依赖定时刷盘
+- **reconcile 用于对账**：显式触发集合级对账（以内存为权威修复漂移），返回 diff 明细；日常收敛由增量同步承担

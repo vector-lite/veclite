@@ -5,7 +5,7 @@
 文档型持久化（MONGODB/POSTGRES）采用写透模式（RPO=0）：upsert/delete 先提交真相源再更新内存。
 在此前提下：
 
-- 旧 `saveStore` 的"全量刷盘"语义失效——内存中没有真相源不知道的数据，全量重写纯属浪费；
+- 旧快照路径 `saveStore`（已更名 `SnapshotFileStorage.flushSnapshot`）的"全量刷盘"语义失效——内存中没有真相源不知道的数据，全量重写纯属浪费；
   且 SQ8 冻结库会把真相源原始 Float32 向量覆盖为反量化近似值（精度回退）。
 - 旧 `reload` 的"定时全量重载"在多节点下代价 O(N) 全表扫描 + 内存全量重建，
   且装载窗口内并发检索可见空/部分数据。
@@ -28,7 +28,7 @@
 | --- | --- | --- |
 | `upsertDocuments` | 写透落原始 Float32（不变） | 增量 |
 | `loadStore` | 全量重建（排除 tombstone），以**装载开始时间**写入水位基线 | O(N)，显式触发 |
-| `saveStore` | 集合级对账：按 docId 集合差补缺失、软删滞留行、同步元数据；**不重写已一致文档** | O(N) ID 比对，无向量重写 |
+| `reconcileStore` | 集合级对账：按 docId 集合差补缺失、软删滞留行、同步元数据；**不重写已一致文档**；返回 `ReconcileResult`（双向修复条数、样本 ID、耗时）供管理侧展示 | O(N) ID 比对，无向量重写 |
 | `incrementalSync` | 快检（`countUpdatedSince==0` 短路）→ 拉取 `updatedAt > watermark` 变更（含 tombstone）→ 内存 upsert/删除 → 水位推进到本批最大 updatedAt | 与真实增量成正比 |
 
 ### 调度面
@@ -42,7 +42,7 @@
 ### 语义分层（公共 API）
 
 - `reload` = 全量重建 + 水位基线（冷启动/修复）；
-- `refresh` = 对账修复（运维显式触发；多节点下意味着"本节点内存为权威"，禁止定时执行）；
+- `reconcileStore` = 对账修复（运维显式触发；多节点下意味着"本节点内存为权威"，禁止定时执行）；HTTP 入口 `POST /stores/{name}/reconcile`，管理前端在 Store 详情页提供带确认与结果展示的可视化入口；
 - `syncStore` = 增量同步（多节点定时收敛的常态通道）。
 
 ## 已知边界

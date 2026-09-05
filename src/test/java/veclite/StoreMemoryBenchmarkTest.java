@@ -13,7 +13,6 @@ import veclite.engine.VectorEngineClientImpl;
 import veclite.model.StorageType;
 import veclite.model.VectorDocument;
 import veclite.persistence.SnapshotFileStorage;
-import veclite.persistence.VectorPersistenceStorage;
 
 import java.io.File;
 import java.io.OutputStream;
@@ -51,7 +50,7 @@ public class StoreMemoryBenchmarkTest {
         properties.getStorage().getSnapshotFile().setBasePath(resourcePath);
 
         LocalVectorEngine engine = new LocalVectorEngine();
-        VectorPersistenceStorage storage = new SnapshotFileStorage(properties);
+        SnapshotFileStorage storage = new SnapshotFileStorage(properties);
         VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, storage, properties, null);
 
         runGC();
@@ -149,7 +148,7 @@ public class StoreMemoryBenchmarkTest {
         long saveStart = System.currentTimeMillis();
         for (int s = 1; s <= storeCount; s++) {
             String storeName = "store_" + s;
-            client.refresh(storeName);
+            storage.flushSnapshot(engine.getStore(storeName));
             System.out.println("  - Store [" + storeName + "] 快照落盘成功。");
         }
         long saveEnd = System.currentTimeMillis();

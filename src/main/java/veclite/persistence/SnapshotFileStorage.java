@@ -41,10 +41,10 @@ public class SnapshotFileStorage implements VectorPersistenceStorage {
     }
 
     /**
-     * 将指定的 LocalVectorStore 导出刷盘保存到本地文件快照。
+     * 将指定的 LocalVectorStore 导出刷盘保存到本地文件快照（遗留快照路径专用，
+     * 仅旧基准与回归测试使用；生产持久化走文档型真相源，无刷盘动作）。
      */
-    @Override
-    public synchronized void saveStore(LocalVectorStore store) {
+    public synchronized void flushSnapshot(LocalVectorStore store) {
         if (store == null) {
             return;
         }

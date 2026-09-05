@@ -7,6 +7,7 @@ import veclite.api.VectorStoreMetadata;
 import veclite.config.VectorLiteProperties;
 import veclite.engine.LocalVectorStore;
 import veclite.model.QuantizationType;
+import veclite.model.ReconcileResult;
 import veclite.model.StorageType;
 import veclite.model.StoreSyncResult;
 import veclite.model.VectorDocument;
@@ -30,7 +31,7 @@ class AbstractDocumentPersistenceTest {
 
     private static final String STORE = "orchestration_store";
 
-    // ---- 对账（saveStore）----
+    // ---- 对账（reconcileStore）----
 
     @Test
     @DisplayName("对账：真相源与内存一致的文档不重写，内容漂移不被内存覆盖")
@@ -44,7 +45,7 @@ class AbstractDocumentPersistenceTest {
         store.upsert(doc("a", new float[]{1.0f, 2.0f}));
 
         long upsertBatchesBefore = repository.upsertBatchCalls.get();
-        persistence.saveStore(store);
+        persistence.reconcileStore(store);
 
         // 集合双方一致（id 相同）：真相源原始向量必须原样保留，不被内存值覆盖
         assertArrayEquals(new float[]{9.0f, 9.0f}, repository.getRaw(STORE, "a").orElseThrow().getVector());
@@ -61,11 +62,18 @@ class AbstractDocumentPersistenceTest {
         store.upsert(doc("keep", new float[]{1.0f, 0.0f}));
         repository.putRaw(STORE, entity("ghost", new float[]{0.5f, 0.5f}));
 
-        persistence.saveStore(store);
+        ReconcileResult staleResult = persistence.reconcileStore(store);
 
         assertTrue(repository.getRaw(STORE, "ghost").orElseThrow().isDeleted(), "stale row must be tombstoned");
         assertTrue(repository.listDocumentIds(STORE).contains("keep"));
         assertFalse(repository.getRaw(STORE, "keep").orElseThrow().isDeleted());
+        // 对账明细：真相源原本只有滞留行 ghost（软删），内存独有的 keep 被补齐；
+        // 双向修复的样本 ID 均可追溯，内存条数与修复后的真相源条数对齐
+        assertEquals(1, staleResult.staleSoftDeleted());
+        assertEquals(List.of("ghost"), staleResult.staleSamples());
+        assertEquals(1, staleResult.missingUpserted());
+        assertEquals(List.of("keep"), staleResult.missingSamples());
+        assertEquals(staleResult.memoryActiveCount(), staleResult.truthActiveCount());
 
         // 内存独有文档（真相源缺失）被补齐：先清空真相源再对账验证补齐路径
         InMemoryVectorDocumentRepository emptyTruth = new InMemoryVectorDocumentRepository();
@@ -73,9 +81,16 @@ class AbstractDocumentPersistenceTest {
         LocalVectorStore source = newStore(emptyTruth, 2, QuantizationType.NONE);
         source.upsert(doc("d1", new float[]{1.0f, 2.0f}));
         source.upsert(doc("d2", new float[]{3.0f, 4.0f}));
-        repairing.saveStore(source);
+        ReconcileResult result = repairing.reconcileStore(source);
         assertArrayEquals(new float[]{1.0f, 2.0f}, emptyTruth.getRaw(STORE, "d1").orElseThrow().getVector());
         assertEquals(2, emptyTruth.findStoreMetadata(STORE).orElseThrow().getActiveCount());
+        // 对账明细：补齐 2 条、无滞留行，内存与修复后的真相源条数对齐，样本 ID 可追溯
+        assertEquals(2, result.missingUpserted());
+        assertEquals(0, result.staleSoftDeleted());
+        assertEquals(2, result.memoryActiveCount());
+        assertEquals(2, result.truthActiveCount());
+        assertEquals(List.of("d1", "d2"), result.missingSamples());
+        assertTrue(result.durationMillis() >= 0);
     }
 
     @Test
@@ -95,7 +110,7 @@ class AbstractDocumentPersistenceTest {
         assertTrue(store.isSQ8Frozen());
 
         long upsertBatchesBefore = repository.upsertBatchCalls.get();
-        persistence.saveStore(store);
+        persistence.reconcileStore(store);
 
         // 集合一致时不发生任何写入：真相源保持原始 Float32，而非量化-反量化往返后的近似值
         assertArrayEquals(vectorA, repository.getRaw(STORE, "a").orElseThrow().getVector());

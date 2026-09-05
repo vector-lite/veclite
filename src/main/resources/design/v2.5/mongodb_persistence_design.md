@@ -186,7 +186,7 @@ listAll(): 读 veclite_store_meta（发现存量 Store）
 | `VectorDocumentRepository`（新，端口） | `veclite.persistence` | 数据源端口（§3.4 扩展点），未来 PostgreSQL 实现此接口 |
 | `DocumentBackedPersistence`（新） | `veclite.persistence` | 写透编排端口，extends `VectorPersistenceStorage`：upsert/delete 文档 + 元数据维护 |
 | `MongoVectorDocumentRepository`（新） | `veclite.persistence.mongo` | 端口的 MongoDB 适配器（唯一复合索引、bulkWrite、游标扫描） |
-| `MongoVectorPersistenceStorage`（新） | `veclite.persistence.mongo` | 实现 `DocumentBackedPersistence`：写透、全量对账（saveStore）、游标重建（loadStore） |
+| `MongoVectorPersistenceStorage`（新） | `veclite.persistence.mongo` | 实现 `DocumentBackedPersistence`：写透、全量对账（reconcileStore）、游标重建（loadStore） |
 | `LocalVectorStore.findIdsByFilter`（新） | `veclite.engine` | 返回过滤命中的文档 ID，供 `deleteByFilter` 写透删除；`deleteByFilter` 重构为 `findIdsByFilter + deleteByIds`，行为不变 |
 | `VectorLiteProperties.StorageConfig` 增加 `mongodb` 配置节 | `veclite.config` | uri / database / collections / scanBatchSize |
 | `VectorEngineClientImpl` 写透与发现 | `veclite.engine` | upsert/delete 先提交 DB 再改内存；启动双发现（properties + meta 集合）；`createStore` 幂等装载已持久化数据 |

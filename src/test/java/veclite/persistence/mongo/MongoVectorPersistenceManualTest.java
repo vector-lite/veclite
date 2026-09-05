@@ -27,12 +27,14 @@ import veclite.persistence.DocumentBackedPersistence;
 import veclite.persistence.VectorDocumentEntity;
 import veclite.persistence.VectorDocumentRepository;
 
+import java.time.Instant;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -86,7 +88,10 @@ class MongoVectorPersistenceManualTest {
     private static void cleanDatabase() {
         try (var mongo = MongoClients.create(MONGO_URI)) {
             MongoDatabase db = mongo.getDatabase(TEST_DATABASE);
-            db.getCollection("veclite_document").drop();
+            // Store 集合按 storeName 命名（无共享文档集合），必须逐个清理，
+            // 否则软删 tombstone 等残留行会跨测试运行累积
+            db.getCollection(STORE_NAME).drop();
+            db.getCollection("it_store_sq8").drop();
             db.getCollection("veclite_store_meta").drop();
         }
     }
@@ -149,8 +154,9 @@ class MongoVectorPersistenceManualTest {
         assertEquals("d2", results.get(0).getId());
     }
 
+    /** 按 docId 查找文档实体（含 tombstone：scan 已排除软删行，这里走增量扫描通道） */
     private VectorDocumentEntity scanEntity(String docId) {
-        Iterator<VectorDocumentEntity> cursor = repository.scan(STORE_NAME);
+        Iterator<VectorDocumentEntity> cursor = repository.scanUpdatedSince(STORE_NAME, Instant.EPOCH);
         try {
             while (cursor.hasNext()) {
                 VectorDocumentEntity entity = cursor.next();
@@ -172,11 +178,13 @@ class MongoVectorPersistenceManualTest {
 
     @Test
     @Order(3)
-    @DisplayName("deleteByIds 写透删除：真相源与内存同步，reload 后保持删除语义")
+    @DisplayName("deleteByIds 写透删除：真相源软删（tombstone），reload 后保持删除语义")
     void deleteByIdsShouldPropagateToMongo() {
         DeleteResult result = client.deleteByIds(STORE_NAME, List.of("d1"));
         assertEquals(1, result.getDeletedCount());
-        assertEquals(2, repository.count(STORE_NAME));
+        // 软删除保留 tombstone 行：活跃集合不再包含 d1，物理行数不变
+        assertFalse(activeIds().contains("d1"));
+        assertTrue(scanEntity("d1").isDeleted());
 
         client.reload(STORE_NAME);
         assertEquals(2, client.listDocuments(STORE_NAME, 1, 10).getItems().size());
@@ -188,7 +196,7 @@ class MongoVectorPersistenceManualTest {
     void deleteByFilterShouldPropagateToMongo() {
         DeleteResult result = client.deleteByFilter(STORE_NAME, FilterExpression.eq("category", "b"));
         assertEquals(1, result.getDeletedCount());
-        assertEquals(1, repository.count(STORE_NAME));
+        assertFalse(activeIds().contains("d2"));
 
         client.reload(STORE_NAME);
         assertEquals("d3", client.listDocuments(STORE_NAME, 1, 10).getItems().get(0).getId());
@@ -249,19 +257,27 @@ class MongoVectorPersistenceManualTest {
 
     @Test
     @Order(7)
-    @DisplayName("saveStore 全量对账：清除真相源中的滞留行并同步 activeCount")
+    @DisplayName("saveStore 集合级对账：软删真相源滞留行并同步 activeCount，已一致文档不重写")
     void saveStoreShouldReconcileStaleRows() {
         // 直接向真相源插入一条内存中不存在的滞留行
         repository.upsertBatch(STORE_NAME, List.of(
                 veclite.persistence.VectorDocumentEntity.float32(
                         "ghost", "stale", Map.of(), new float[]{0.3f, 0.3f, 0.3f, 0.3f}, null)));
-        assertEquals(2, repository.count(STORE_NAME));
+        assertTrue(activeIds().contains("ghost"));
 
         LocalVectorStore store = new LocalVectorStore(definition(STORE_NAME, 4, QuantizationType.NONE), properties);
         storage.saveStore(store);
 
-        assertEquals(store.getActiveCount(), repository.count(STORE_NAME));
+        // 滞留行被软删（tombstone 保留），活跃集合与内存 activeCount 一致
+        assertTrue(scanEntity("ghost").isDeleted());
+        assertFalse(activeIds().contains("ghost"));
+        assertEquals(store.getActiveCount(), activeIds().size());
         assertEquals(store.getActiveCount(),
                 repository.findStoreMetadata(STORE_NAME).get().getActiveCount());
+    }
+
+    /** 真相源活跃（未软删）文档 ID 集合 */
+    private List<String> activeIds() {
+        return repository.listDocumentIds(STORE_NAME);
     }
 }

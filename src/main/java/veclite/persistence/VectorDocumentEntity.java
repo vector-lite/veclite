@@ -27,6 +27,8 @@ public class VectorDocumentEntity {
     @Deprecated
     private String legacyEmbeddingModel;
     private Instant updatedAt;
+    /** 软删除标记（tombstone）：增量同步靠它感知其他节点的删除；物理清理由对账/装载按保留期执行 */
+    private boolean deleted;
 
     /**
      * 将 Float32 向量序列化为小端字节数组（4 字节/维，无任何额外膨胀）。
@@ -119,4 +121,6 @@ public class VectorDocumentEntity {
     public String getEmbeddingModel() { return legacyEmbeddingModel; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+    public boolean isDeleted() { return deleted; }
+    public void setDeleted(boolean deleted) { this.deleted = deleted; }
 }

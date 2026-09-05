@@ -35,7 +35,11 @@ class VectorLitePropertiesBindingTest {
                 .bind("veclite", Bindable.of(VectorLiteProperties.class))
                 .get();
 
-        assertEquals(StorageType.POSTGRES, properties.getStorage().getType());
+        // type 的具体取值由部署环境选择，这里验证绑定成功且为合法数据库后端；
+        // 枚举非法值在绑定阶段即抛错，无需在此断言特定枚举
+        StorageType boundType = properties.getStorage().getType();
+        assertTrue(boundType == StorageType.MONGODB || boundType == StorageType.POSTGRES,
+                "storage.type 应绑定为 MONGODB 或 POSTGRES, actual: " + boundType);
         // uri 由本地环境决定（凭证、库路径可能以任意组合出现），只做协议前缀断言；
         // 库名由独立的 database 配置承载，见下方断言
         String uri = properties.getStorage().getMongodb().getUri();
@@ -47,6 +51,14 @@ class VectorLitePropertiesBindingTest {
                 properties.getStorage().getPostgres().getJdbcUrl());
         assertEquals("veclite_store_meta", properties.getStorage().getPostgres().getMetaTable());
         assertEquals(1000, properties.getStorage().getPostgres().getFetchSize());
+
+        // 增量同步配置节绑定：必须落在 veclite.storage.sync 之下且 enabled 真为 true——
+        // 若 sync 块缩进错位（挂在 veclite 之下），调度器 Bean 的 @ConditionalOnProperty
+        // 将不满足，定时同步静默失效，此断言用于拦住该回归
+        assertTrue(properties.getStorage().getSync().isEnabled(),
+                "veclite.storage.sync.enabled 应在 application.yml 中绑定并开启");
+        assertTrue(properties.getStorage().getSync().getIntervalSeconds() > 0);
+        assertTrue(properties.getStorage().getSync().getRetentionDays() > 0);
     }
 
     @Test

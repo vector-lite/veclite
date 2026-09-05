@@ -2,6 +2,7 @@ package veclite.persistence;
 
 import veclite.api.VectorStoreMetadata;
 
+import java.time.Instant;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
@@ -35,20 +36,37 @@ public interface VectorDocumentRepository {
 
     /**
      * 批量写入/更新文档（按 storeName + docId 幂等 upsert）。
+     * upsert 必须同时清除软删除标记（复活被 tombstone 的 docId）。
      * 批量导入必须使用底层批量 API（bulkWrite / JDBC batch），禁止逐条提交。
      */
     void upsertBatch(String storeName, List<VectorDocumentEntity> entities);
 
-    /** 删除指定文档，返回实际删除条数；ID 不存在时静默跳过 */
+    /**
+     * 软删除指定文档（标记 deleted + 刷新 updatedAt，保留 tombstone 行），
+     * 返回实际标记的条数；ID 不存在时静默跳过。
+     * 增量同步依赖 tombstone 让其他节点感知删除；物理清理由 {@link #purgeSoftDeletedBefore} 按保留期执行。
+     */
     long deleteByIds(String storeName, List<String> documentIds);
 
     /** 删除指定 Store 的全部文档（dropStore 场景），返回删除条数 */
     long deleteAll(String storeName);
 
-    /** 全量流式扫描指定 Store 的文档（游标分批拉取，禁止一次性加载全量到内存） */
+    /** 全量流式扫描指定 Store 的<b>未删除</b>文档（游标分批拉取，禁止一次性加载全量到内存） */
     Iterator<VectorDocumentEntity> scan(String storeName);
 
-    /** 拉取指定 Store 的全部文档 ID（全量对账时用于找出真相源中的滞留行） */
+    /**
+     * 增量流式扫描 updatedAt 严格晚于 watermark 的文档（<b>包含</b>软删除行，
+     * 调用方据 deleted 标记分别应用 upsert/删除）。游标分批拉取，禁止一次性加载全量。
+     */
+    Iterator<VectorDocumentEntity> scanUpdatedSince(String storeName, Instant watermark);
+
+    /** updatedAt 晚于 watermark 的文档数（含软删除行）；增量同步前的零成本快检 */
+    long countUpdatedSince(String storeName, Instant watermark);
+
+    /** 物理删除 updatedAt 早于 cutoff 的软删除行（tombstone 压缩），返回删除条数 */
+    long purgeSoftDeletedBefore(String storeName, Instant cutoff);
+
+    /** 拉取指定 Store 的全部<b>未删除</b>文档 ID（对账时用于找出真相源中的滞留行） */
     List<String> listDocumentIds(String storeName);
 
     long count(String storeName);

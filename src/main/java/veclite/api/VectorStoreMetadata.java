@@ -40,6 +40,9 @@ public class VectorStoreMetadata implements Serializable {
     private Instant createdAt;
     private Instant updatedAt;
 
+    /** 增量同步水位：内存投影已消费到的文档 updatedAt；全量装载时以装载开始时间建立基线 */
+    private Instant syncWatermark;
+
     public static VectorStoreMetadata fromDefinition(VectorStoreDefinition definition, StorageType mode) {
         VectorStoreMetadata metadata = new VectorStoreMetadata();
         metadata.setStoreName(definition.getStoreName());
@@ -95,4 +98,6 @@ public class VectorStoreMetadata implements Serializable {
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+    public Instant getSyncWatermark() { return syncWatermark; }
+    public void setSyncWatermark(Instant syncWatermark) { this.syncWatermark = syncWatermark; }
 }

@@ -150,6 +150,7 @@ public class VectorLiteProperties {
         private PayloadConfig payload = new PayloadConfig();
         private MongoConfig mongodb = new MongoConfig();
         private PostgresConfig postgres = new PostgresConfig();
+        private SyncConfig sync = new SyncConfig();
 
         public StorageType getType() {
             return type;
@@ -197,6 +198,51 @@ public class VectorLiteProperties {
 
         public void setPostgres(PostgresConfig postgres) {
             this.postgres = postgres;
+        }
+
+        public SyncConfig getSync() {
+            return sync;
+        }
+
+        public void setSync(SyncConfig sync) {
+            this.sync = sync;
+        }
+    }
+
+    /**
+     * 增量同步调度（文档型后端 MONGODB/POSTGRES 专用）：多节点部署下按水位从真相源
+     * 收敛本节点内存投影，替代旧版"定时全量重载"的轻量方案。
+     */
+    public static class SyncConfig {
+        /** 是否启用定时增量同步调度器（默认关闭，多节点部署显式开启） */
+        private boolean enabled = false;
+        /** 调度间隔（秒），按固定延迟执行 */
+        private int intervalSeconds = 30;
+        /** 软删除 tombstone 物理保留天数，超过后被清理；<=0 表示不清理 */
+        private int retentionDays = 7;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getIntervalSeconds() {
+            return intervalSeconds;
+        }
+
+        public void setIntervalSeconds(int intervalSeconds) {
+            this.intervalSeconds = intervalSeconds;
+        }
+
+        public int getRetentionDays() {
+            return retentionDays;
+        }
+
+        public void setRetentionDays(int retentionDays) {
+            this.retentionDays = retentionDays;
         }
     }
 
@@ -356,10 +402,12 @@ public class VectorLiteProperties {
         }
     }
 
+    /**
+     * 本地文件快照目录配置。SNAPSHOT_FILE 持久化已退出生产路径（数据库为唯一持久化后端），
+     * 仅 PayloadMode.MMAP 下 payload 落盘文件仍使用该 basePath。
+     */
     public static class SnapshotFileConfig {
         private String basePath = "./data/vector-lite";
-        private int flushIntervalSeconds = 30;
-        private boolean flushOnShutdown = true;
 
         public String getBasePath() {
             return basePath;
@@ -367,22 +415,6 @@ public class VectorLiteProperties {
 
         public void setBasePath(String basePath) {
             this.basePath = basePath;
-        }
-
-        public int getFlushIntervalSeconds() {
-            return flushIntervalSeconds;
-        }
-
-        public void setFlushIntervalSeconds(int flushIntervalSeconds) {
-            this.flushIntervalSeconds = flushIntervalSeconds;
-        }
-
-        public boolean isFlushOnShutdown() {
-            return flushOnShutdown;
-        }
-
-        public void setFlushOnShutdown(boolean flushOnShutdown) {
-            this.flushOnShutdown = flushOnShutdown;
         }
     }
 

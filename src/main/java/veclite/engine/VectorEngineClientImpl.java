@@ -19,7 +19,8 @@ import java.util.List;
 /**
  * 向量引擎客户端实现类。
  * <p>
- * 统一对外提供向量库的生命周期管理、文档写入（Upsert）、向量与文本检索、删除以及持久化刷盘与恢复能力。
+ * 统一对外提供向量库的生命周期管理、文档写入（Upsert）、向量与文本检索、删除，
+ * 以及持久化的写透、对账（refresh）、全量重建（reload）与增量同步（syncStore）能力。
  */
 public class VectorEngineClientImpl implements VectorEngineClient {
 
@@ -341,7 +342,8 @@ public class VectorEngineClientImpl implements VectorEngineClient {
     }
 
     /**
-     * 手动将指定 Store 刷盘持久化到本地。
+     * 以内存为权威对真相源做集合级对账（补缺失文档、软删滞留行、同步元数据）。
+     * 写透路径下内存与真相源本就一致，这是运维修复工具而非周期性任务。
      */
     @Override
     public void refresh(String storeName) {
@@ -350,11 +352,25 @@ public class VectorEngineClientImpl implements VectorEngineClient {
     }
 
     /**
-     * 手动从本地持久化磁盘文件重载指定 Store 的数据。
+     * 全量重建：重置内存后从真相源整库装载，并建立增量同步水位基线。
      */
     @Override
     public void reload(String storeName) {
         LocalVectorStore store = localVectorEngine.getStore(storeName);
         persistence.loadStore(store);
+    }
+
+    /**
+     * 增量同步：按元数据水位从真相源拉取变更应用到内存。
+     * 仅文档型持久化支持；其余后端显式报错，避免定时任务空转造成"已同步"的错觉。
+     */
+    @Override
+    public StoreSyncResult syncStore(String storeName) {
+        LocalVectorStore store = localVectorEngine.getStore(storeName);
+        if (documentPersistence == null) {
+            throw new IllegalStateException(
+                    "Incremental sync requires a document-backed persistence backend (MONGODB/POSTGRES)");
+        }
+        return documentPersistence.incrementalSync(store);
     }
 }

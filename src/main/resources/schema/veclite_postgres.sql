@@ -14,8 +14,10 @@
     metadata        JSONB,
     vector          BYTEA,
     updated_at      TIMESTAMPTZ  DEFAULT CURRENT_TIMESTAMP,
+    deleted         BOOLEAN      NOT NULL DEFAULT FALSE,  -- 软删除 tombstone，增量同步据此感知删除
     PRIMARY KEY (doc_id)
-); */
+);
+CREATE INDEX "<storeName>_updated_at_idx" ON "<storeName>" (updated_at);  -- 增量同步水位扫描 */
 
 -- Store 级元数据：1 库 1 行
 CREATE TABLE IF NOT EXISTS veclite_store_meta (
@@ -32,7 +34,8 @@ CREATE TABLE IF NOT EXISTS veclite_store_meta (
     sq8_min_per_dim             BYTEA,                -- SQ8 冻结态逐维 min（float[] 小端）
     sq8_scale_per_dim           BYTEA,                -- SQ8 冻结态逐维 scale（float[] 小端）
     created_at                  TIMESTAMPTZ  DEFAULT CURRENT_TIMESTAMP,
-    updated_at                  TIMESTAMPTZ  DEFAULT CURRENT_TIMESTAMP
+    updated_at                  TIMESTAMPTZ  DEFAULT CURRENT_TIMESTAMP,
+    sync_watermark              TIMESTAMPTZ                           -- 增量同步水位（内存投影已消费到的 updatedAt）
 );
 
 -- Embedding 数据源：数据库维护，(name, version) 复合主键支持同名多版本

@@ -214,7 +214,7 @@ public class VectorLiteDebugController {
         return client.deleteByIds(storeName, ids);
     }
 
-    @Operation(summary = "Reload store data from persistence")
+    @Operation(summary = "Fully rebuild the in-memory store from persistence (establishes sync watermark baseline)")
     @PostMapping("/stores/{storeName}/reload")
     public Map<String, String> reload(
             @Parameter(description = "Store name") @PathVariable String storeName) {
@@ -222,12 +222,19 @@ public class VectorLiteDebugController {
         return success();
     }
 
-    @Operation(summary = "Persist the latest in-memory data for a store")
+    @Operation(summary = "Reconcile the truth source against in-memory data (repair missing/stale rows only)")
     @PostMapping("/stores/{storeName}/refresh")
     public Map<String, String> refresh(
             @Parameter(description = "Store name") @PathVariable String storeName) {
         client.refresh(storeName);
         return success();
+    }
+
+    @Operation(summary = "Incrementally sync changes from the truth source since the last watermark")
+    @PostMapping("/stores/{storeName}/sync")
+    public StoreSyncResult sync(
+            @Parameter(description = "Store name") @PathVariable String storeName) {
+        return client.syncStore(storeName);
     }
 
     @Operation(summary = "List configured embedding service endpoints")

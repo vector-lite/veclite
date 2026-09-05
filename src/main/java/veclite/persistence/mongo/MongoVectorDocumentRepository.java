@@ -8,10 +8,12 @@ import com.mongodb.client.MongoCursor;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.BulkWriteOptions;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.ReplaceOneModel;
 import com.mongodb.client.model.ReplaceOptions;
-import com.mongodb.client.model.Projections;
+import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.result.DeleteResult;
+import com.mongodb.client.result.UpdateResult;
 import org.bson.Document;
 import org.bson.types.Binary;
 import veclite.config.VectorLiteProperties;
@@ -24,6 +26,7 @@ import veclite.persistence.VectorStorageFormat;
 import veclite.persistence.StoreNameValidator;
 import veclite.persistence.StorePersistenceHandle;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
@@ -31,6 +34,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * {@link VectorDocumentRepository} 的 MongoDB 适配器（v2.5 单一真相源持久化的默认实现）。
@@ -50,6 +55,7 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
     private static final String FIELD_METADATA = "metadata";
     private static final String FIELD_VECTOR = "vector";
     private static final String FIELD_UPDATED_AT = "updated_at";
+    private static final String FIELD_DELETED = "deleted";
 
     private static final String META_DIMENSION = "dimension";
     private static final String META_METRIC = "metric";
@@ -63,11 +69,14 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
     private static final String META_SQ8_MIN = "sq8_min_per_dim";
     private static final String META_SQ8_SCALE = "sq8_scale_per_dim";
     private static final String META_CREATED_AT = "created_at";
+    private static final String META_SYNC_WATERMARK = "sync_watermark";
 
     private final MongoClient mongoClient;
     private final MongoDatabase database;
     private final String metaCollectionName;
     private final int scanBatchSize;
+    /** 已执行过 DDL（建索引）的集合缓存：ensureStore 在每次批量写都会调用，避免重复往返 */
+    private final Set<String> ensuredCollections = ConcurrentHashMap.newKeySet();
 
     public MongoVectorDocumentRepository(VectorLiteProperties properties) {
         VectorLiteProperties.MongoConfig config = properties.getStorage().getMongodb();
@@ -95,9 +104,11 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
     @Override
     public StorePersistenceHandle ensureStore(String storeName) {
         StoreNameValidator.validate(storeName);
-        MongoCollection<Document> collection = documents(storeName);
-        collection.createIndex(new Document(FIELD_DOC_ID, 1), new com.mongodb.client.model.IndexOptions().unique(true));
-        collection.createIndex(new Document(FIELD_UPDATED_AT, 1));
+        if (ensuredCollections.add(storeName)) {
+            MongoCollection<Document> collection = documents(storeName);
+            collection.createIndex(new Document(FIELD_DOC_ID, 1), new com.mongodb.client.model.IndexOptions().unique(true));
+            collection.createIndex(new Document(FIELD_UPDATED_AT, 1));
+        }
         return new StorePersistenceHandle(storeName, storeName);
     }
 
@@ -111,6 +122,7 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
     public void dropStore(String storeName) {
         StoreNameValidator.validate(storeName);
         documents(storeName).drop();
+        ensuredCollections.remove(storeName);
         deleteStoreMetadata(storeName);
     }
 
@@ -136,8 +148,11 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         if (documentIds == null || documentIds.isEmpty()) {
             return 0;
         }
-        DeleteResult result = documents(storeName).deleteMany(Filters.in(FIELD_DOC_ID, documentIds));
-        return result.getDeletedCount();
+        // 软删除：保留 tombstone 行（deleted=true），供其他节点经增量扫描感知删除
+        UpdateResult result = documents(storeName).updateMany(
+                Filters.in(FIELD_DOC_ID, documentIds),
+                new Document("$set", new Document(FIELD_DELETED, true).append(FIELD_UPDATED_AT, new Date())));
+        return result.getModifiedCount();
     }
 
     @Override
@@ -148,17 +163,38 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
     @Override
     public Iterator<VectorDocumentEntity> scan(String storeName) {
         return documents(storeName)
-                .find()
+                .find(Filters.ne(FIELD_DELETED, true))
                 .batchSize(scanBatchSize)
                 .map(doc -> toEntity(doc, VectorStorageFormat.FLOAT32))
                 .iterator();
     }
 
     @Override
+    public Iterator<VectorDocumentEntity> scanUpdatedSince(String storeName, Instant watermark) {
+        return documents(storeName)
+                .find(Filters.gt(FIELD_UPDATED_AT, Date.from(watermark)))
+                .batchSize(scanBatchSize)
+                .map(doc -> toEntity(doc, VectorStorageFormat.FLOAT32))
+                .iterator();
+    }
+
+    @Override
+    public long countUpdatedSince(String storeName, Instant watermark) {
+        return documents(storeName).countDocuments(Filters.gt(FIELD_UPDATED_AT, Date.from(watermark)));
+    }
+
+    @Override
+    public long purgeSoftDeletedBefore(String storeName, Instant cutoff) {
+        DeleteResult result = documents(storeName).deleteMany(
+                Filters.and(Filters.eq(FIELD_DELETED, true), Filters.lt(FIELD_UPDATED_AT, Date.from(cutoff))));
+        return result.getDeletedCount();
+    }
+
+    @Override
     public List<String> listDocumentIds(String storeName) {
         List<String> ids = new ArrayList<>();
         try (MongoCursor<Document> cursor = documents(storeName)
-                .find()
+                .find(Filters.ne(FIELD_DELETED, true))
                 .projection(Projections.include(FIELD_DOC_ID))
                 .batchSize(scanBatchSize)
                 .iterator()) {
@@ -174,13 +210,36 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         return documents(storeName).countDocuments();
     }
 
+    /**
+     * 以 $set 部分更新保存元数据（upsert）。与旧版整体 replace 的差别：
+     * created_at 改为仅在插入时写入；同步水位入参为 null 时保留库中现值，
+     * 避免 createStore 等仅登记定义的调用方把增量水位抹掉。
+     */
     @Override
     public void saveStoreMetadata(VectorStoreMetadata metadata) {
-        Document doc = toMetaDocument(metadata);
-        storeMeta().replaceOne(
+        Date now = new Date();
+        Document set = new Document();
+        set.append(META_DIMENSION, metadata.getDimension());
+        set.append(META_METRIC, metadata.getMetric());
+        set.append(META_MAX_CAPACITY, metadata.getMaxCapacity());
+        set.append(META_EMBEDDING_MODEL, metadata.getEmbeddingModel());
+        set.append(META_EMBEDDING_MODEL_VERSION, metadata.getEmbeddingModelVersion());
+        set.append(META_QUANTIZATION, metadata.getQuantization() != null ? metadata.getQuantization().name() : QuantizationType.NONE.name());
+        set.append(META_INDEXED_FIELDS, metadata.getIndexedMetadataFields());
+        set.append(META_PERSISTENCE_MODE, metadata.getPersistenceMode() != null ? metadata.getPersistenceMode().name() : StorageType.MONGODB.name());
+        set.append(META_ACTIVE_COUNT, metadata.getActiveCount());
+        set.append(META_SQ8_MIN, metadata.getSq8MinPerDim() != null ? VectorDocumentEntity.encodeVector(metadata.getSq8MinPerDim()) : null);
+        set.append(META_SQ8_SCALE, metadata.getSq8ScalePerDim() != null ? VectorDocumentEntity.encodeVector(metadata.getSq8ScalePerDim()) : null);
+        set.append(FIELD_UPDATED_AT, now);
+        if (metadata.getSyncWatermark() != null) {
+            set.append(META_SYNC_WATERMARK, Date.from(metadata.getSyncWatermark()));
+        }
+        Document setOnInsert = new Document(META_CREATED_AT,
+                metadata.getCreatedAt() != null ? Date.from(metadata.getCreatedAt()) : now);
+        storeMeta().updateOne(
                 Filters.eq(FIELD_STORE_NAME, metadata.getStoreName()),
-                doc,
-                new ReplaceOptions().upsert(true));
+                new Document("$set", set).append("$setOnInsert", setOnInsert),
+                new UpdateOptions().upsert(true));
     }
 
     @Override
@@ -230,6 +289,8 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
             doc.append(FIELD_VECTOR, VectorDocumentEntity.encodeVector(entity.getVector()));
         }
         doc.append(FIELD_UPDATED_AT, new Date());
+        // upsert 整体替换文档，顺带清除 tombstone（被删除的 docId 重新写入即复活）
+        doc.append(FIELD_DELETED, entity.isDeleted());
         return doc;
     }
 
@@ -250,6 +311,7 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         }
         Date updatedAt = doc.getDate(FIELD_UPDATED_AT);
         entity.setUpdatedAt(updatedAt != null ? updatedAt.toInstant() : null);
+        entity.setDeleted(doc.getBoolean(FIELD_DELETED, false));
         return entity;
     }
 
@@ -261,37 +323,6 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
             return binary.getData();
         }
         return value instanceof byte[] bytes ? bytes : null;
-    }
-
-    private VectorStorageFormat parseFormat(String name) {
-        if (name == null) {
-            return VectorDocumentEntity.DEFAULT_FORMAT;
-        }
-        try {
-            return VectorStorageFormat.valueOf(name);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalStateException("Unknown vector storage format in document persistence: " + name, e);
-        }
-    }
-
-    private Document toMetaDocument(VectorStoreMetadata metadata) {
-        Document doc = new Document();
-        doc.append(FIELD_STORE_NAME, metadata.getStoreName());
-        doc.append(META_DIMENSION, metadata.getDimension());
-        doc.append(META_METRIC, metadata.getMetric());
-        doc.append(META_MAX_CAPACITY, metadata.getMaxCapacity());
-        doc.append(META_EMBEDDING_MODEL, metadata.getEmbeddingModel());
-        doc.append(META_EMBEDDING_MODEL_VERSION, metadata.getEmbeddingModelVersion());
-        doc.append(META_QUANTIZATION, metadata.getQuantization() != null ? metadata.getQuantization().name() : QuantizationType.NONE.name());
-        doc.append(META_INDEXED_FIELDS, metadata.getIndexedMetadataFields());
-        doc.append(META_PERSISTENCE_MODE, metadata.getPersistenceMode() != null ? metadata.getPersistenceMode().name() : StorageType.MONGODB.name());
-        doc.append(META_ACTIVE_COUNT, metadata.getActiveCount());
-        doc.append(META_SQ8_MIN, metadata.getSq8MinPerDim() != null ? VectorDocumentEntity.encodeVector(metadata.getSq8MinPerDim()) : null);
-        doc.append(META_SQ8_SCALE, metadata.getSq8ScalePerDim() != null ? VectorDocumentEntity.encodeVector(metadata.getSq8ScalePerDim()) : null);
-        Date now = new Date();
-        doc.append(META_CREATED_AT, metadata.getCreatedAt() != null ? Date.from(metadata.getCreatedAt()) : now);
-        doc.append(FIELD_UPDATED_AT, now);
-        return doc;
     }
 
     private VectorStoreMetadata toMetadata(Document doc) {
@@ -327,6 +358,8 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         metadata.setCreatedAt(createdAt != null ? createdAt.toInstant() : null);
         Date updatedAt = doc.getDate(FIELD_UPDATED_AT);
         metadata.setUpdatedAt(updatedAt != null ? updatedAt.toInstant() : null);
+        Date syncWatermark = doc.getDate(META_SYNC_WATERMARK);
+        metadata.setSyncWatermark(syncWatermark != null ? syncWatermark.toInstant() : null);
         return metadata;
     }
 }

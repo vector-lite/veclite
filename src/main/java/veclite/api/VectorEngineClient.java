@@ -41,7 +41,22 @@ public interface VectorEngineClient {
     default void rediscoverPersistedStores() {
     }
 
+    /**
+     * 以内存为权威对真相源做集合级对账：补齐真相源缺失的文档、软删滞留行、同步元数据。
+     * 不重写双方已一致的文档（写透路径下内存与真相源本就一致，无需周期性调用）。
+     */
     void refresh(String storeName);
 
+    /**
+     * 全量重建：重置内存后从真相源整库装载，并建立增量同步水位基线。
+     */
     void reload(String storeName);
+
+    /**
+     * 增量同步：按元数据水位从真相源拉取变更应用到内存（多节点定时收敛的轻量通道）。
+     * 默认实现抛出 UnsupportedOperationException，由文档型持久化的具体实现类覆写。
+     */
+    default StoreSyncResult syncStore(String storeName) {
+        throw new UnsupportedOperationException("syncStore requires a document-backed persistence backend");
+    }
 }

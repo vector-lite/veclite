@@ -8,6 +8,7 @@ import veclite.embedding.EmbeddingModelStore;
 import veclite.embedding.EmbeddingService;
 import veclite.embedding.HttpEmbeddingProvider;
 import veclite.engine.LocalVectorEngine;
+import veclite.engine.StoreSyncScheduler;
 import veclite.engine.VectorEngineClientImpl;
 import veclite.model.StorageType;
 import veclite.persistence.mongo.MongoEmbeddingModelStore;
@@ -129,5 +130,20 @@ public class VectorLiteAutoConfiguration {
                                                  EmbeddingModelRegistry embeddingModelRegistry) {
         return new VectorEngineClientImpl(localVectorEngine, embeddingProvider,
                 vectorPersistenceStorage, properties, embeddingModelRegistry);
+    }
+
+    /**
+     * Store 增量同步调度器：veclite.storage.sync.enabled=true 时启动，
+     * 按固定间隔从真相源收敛内存投影（多节点部署用）。文档型持久化专用。
+     */
+    @Bean(destroyMethod = "stop")
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(name = "veclite.storage.sync.enabled", havingValue = "true")
+    public StoreSyncScheduler storeSyncScheduler(VectorEngineClient vectorEngineClient,
+                                                 VectorStoreManager vectorStoreManager,
+                                                 VectorLiteProperties properties) {
+        StoreSyncScheduler scheduler = new StoreSyncScheduler(vectorEngineClient, vectorStoreManager, properties);
+        scheduler.start();
+        return scheduler;
     }
 }

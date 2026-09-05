@@ -2,8 +2,8 @@ package veclite.persistence.postgres;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import veclite.api.VectorStoreMetadata;
 import veclite.config.VectorLiteProperties;
 import veclite.model.QuantizationType;
@@ -68,32 +68,32 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final String metaTable;
     private final int fetchSize;
+    /** 独立构造自建的数据源：为 Hikari 连接池时由 close() 负责释放；注入数据源则生命周期归调用方 */
+    private final DataSource ownedDataSource;
     /** 已执行过 DDL 的文档表缓存：ensureStore 在每次批量写都会调用，避免重复往返 */
     private final Set<String> ensuredTables = ConcurrentHashMap.newKeySet();
 
+    /**
+     * 自建 Hikari 连接池数据源（见 {@link PostgresDataSources}），close() 负责释放；
+     * Spring 装配路径由自动配置注入共享数据源 Bean，走 {@link #PostgresVectorDocumentRepository(VectorLiteProperties, DataSource)}。
+     */
     public PostgresVectorDocumentRepository(VectorLiteProperties properties) {
-        this(properties, createDataSource(properties));
-    }
-
-    public PostgresVectorDocumentRepository(VectorLiteProperties properties, DataSource dataSource) {
         VectorLiteProperties.PostgresConfig config = properties.getStorage().getPostgres();
-        this.jdbc = new JdbcTemplate(dataSource);
+        this.ownedDataSource = PostgresDataSources.createPooledDataSource(properties);
+        this.jdbc = new JdbcTemplate(ownedDataSource);
         this.metaTable = config.getMetaTable();
         this.fetchSize = config.getFetchSize() > 0 ? config.getFetchSize() : 1000;
         ensureSchema();
     }
 
-    /**
-     * 自建轻量数据源：作为 SDK 内嵌的持久化组件，不复用业务方的 {@code spring.datasource}，
-     * 避免与应用主数据源的事务管理、连接池配置相互干扰。
-     */
-    private static DataSource createDataSource(VectorLiteProperties properties) {
+    /** 注入外部数据源（如自动配置的共享池 Bean），生命周期归调用方所有，close() 不代关 */
+    public PostgresVectorDocumentRepository(VectorLiteProperties properties, DataSource dataSource) {
         VectorLiteProperties.PostgresConfig config = properties.getStorage().getPostgres();
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
-        dataSource.setUrl(config.getJdbcUrl());
-        dataSource.setUsername(config.getUsername());
-        dataSource.setPassword(config.getPassword());
-        return dataSource;
+        this.ownedDataSource = null;
+        this.jdbc = new JdbcTemplate(dataSource);
+        this.metaTable = config.getMetaTable();
+        this.fetchSize = config.getFetchSize() > 0 ? config.getFetchSize() : 1000;
+        ensureSchema();
     }
 
     @Override
@@ -326,14 +326,15 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
     }
 
     /**
-     * {@inheritDoc}
-     * <p>
-     * 内置数据源是 {@link DriverManagerDataSource}（无连接池），连接随用随建、由 JDBC 自行回收，
-     * 因此这里无需显式释放；若调用方通过构造器注入了自己的数据源，生命周期仍归调用方所有。
+     * 释放自建数据源（Spring 容器销毁时自动推断调用）。独立构造时内置数据源是
+     * {@link com.zaxxer.hikari.HikariDataSource} 连接池，必须显式关闭；
+     * 注入数据源时生命周期归调用方所有，此处不代关。
      */
     @Override
     public void close() {
-        // 无连接池需要关闭
+        if (ownedDataSource instanceof HikariDataSource hikari) {
+            hikari.close();
+        }
     }
 
     private byte[] toVectorBytes(VectorDocumentEntity entity) {

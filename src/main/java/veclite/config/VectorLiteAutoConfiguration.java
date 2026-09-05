@@ -14,16 +14,24 @@ import veclite.model.StorageType;
 import veclite.persistence.mongo.MongoEmbeddingModelStore;
 import veclite.persistence.mongo.MongoVectorDocumentRepository;
 import veclite.persistence.mongo.MongoVectorPersistenceStorage;
+import veclite.persistence.postgres.PostgresDataSources;
 import veclite.persistence.postgres.PostgresEmbeddingModelStore;
 import veclite.persistence.postgres.PostgresVectorDocumentRepository;
 import veclite.persistence.postgres.PostgresVectorPersistenceStorage;
 import veclite.persistence.VectorPersistenceStorage;
+import com.mongodb.ConnectionString;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+
+import javax.sql.DataSource;
 import veclite.web.VectorLiteDebugController;
 import veclite.web.VectorLiteUiController;
 
@@ -44,18 +52,45 @@ import veclite.web.VectorLiteUiController;
 public class VectorLiteAutoConfiguration {
 
     /**
+     * 共享 MongoDB 客户端（仅 type=MONGODB 时装配）：向量仓储与 Embedding 模型存储
+     * 复用同一连接池，避免各自 MongoClients.create 导致启动即出现两条独立连接。
+     * 容器销毁时由 Spring 推断调用 close() 释放；使用限定名注入以防宿主应用的
+     * 其他 MongoClient Bean 产生歧义。
+     */
+    @Bean(name = "vecliteMongoClient", destroyMethod = "close")
+    @ConditionalOnProperty(name = "veclite.storage.type", havingValue = "MONGODB")
+    public MongoClient vecliteMongoClient(VectorLiteProperties properties) {
+        return MongoClients.create(
+                new ConnectionString(properties.getStorage().getMongodb().getUri()));
+    }
+
+    /**
+     * 共享 PostgreSQL 数据源（仅 type=POSTGRES 时装配）：向量仓储与 Embedding 模型存储
+     * 复用同一 Hikari 连接池——此前两者各建一个 {@code DriverManagerDataSource}（无池，
+     * 每次取连接都新建物理连接）。容器销毁时由 Spring 推断调用 close() 释放；
+     * 使用限定名注入以防宿主应用的其他 DataSource Bean 产生歧义。
+     */
+    @Bean(name = "veclitePostgresDataSource", destroyMethod = "close")
+    @ConditionalOnProperty(name = "veclite.storage.type", havingValue = "POSTGRES")
+    public DataSource veclitePostgresDataSource(VectorLiteProperties properties) {
+        return PostgresDataSources.createPooledDataSource(properties);
+    }
+
+    /**
      * Embedding 模型配置注册中心（数据库维护）。
      * MONGODB / POSTGRES 模式下持久化到各自的模型表；其余模式仅内存生效（重启丢失）。
      */
     @Bean
     @ConditionalOnMissingBean
-    public EmbeddingModelRegistry embeddingModelRegistry(VectorLiteProperties properties) {
+    public EmbeddingModelRegistry embeddingModelRegistry(VectorLiteProperties properties,
+                                                         @Qualifier("vecliteMongoClient") ObjectProvider<MongoClient> mongoClient,
+                                                         @Qualifier("veclitePostgresDataSource") ObjectProvider<DataSource> postgresDataSource) {
         StorageType type = properties.getStorage().getType();
         EmbeddingModelStore store = null;
         if (type == StorageType.MONGODB) {
-            store = new MongoEmbeddingModelStore(properties);
+            store = new MongoEmbeddingModelStore(mongoClient.getObject(), properties);
         } else if (type == StorageType.POSTGRES) {
-            store = new PostgresEmbeddingModelStore(properties);
+            store = new PostgresEmbeddingModelStore(properties, postgresDataSource.getObject());
         }
         return new EmbeddingModelRegistry(store);
     }
@@ -75,16 +110,18 @@ public class VectorLiteAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public VectorPersistenceStorage vectorPersistenceStorage(VectorLiteProperties properties) {
+    public VectorPersistenceStorage vectorPersistenceStorage(VectorLiteProperties properties,
+                                                             @Qualifier("vecliteMongoClient") ObjectProvider<MongoClient> mongoClient,
+                                                             @Qualifier("veclitePostgresDataSource") ObjectProvider<DataSource> postgresDataSource) {
         StorageType type = properties.getStorage().getType();
         if (type == null) {
             throw new IllegalStateException("veclite.storage.type must be MONGODB or POSTGRES");
         }
         return switch (type) {
             case MONGODB -> new MongoVectorPersistenceStorage(
-                    new MongoVectorDocumentRepository(properties), properties);
+                    new MongoVectorDocumentRepository(mongoClient.getObject(), properties), properties);
             case POSTGRES -> new PostgresVectorPersistenceStorage(
-                    new PostgresVectorDocumentRepository(properties), properties);
+                    new PostgresVectorDocumentRepository(properties, postgresDataSource.getObject()), properties);
             case NOOP, SNAPSHOT_FILE -> throw new IllegalStateException(
                     "Database persistence is required; unsupported storage type: " + type);
         };

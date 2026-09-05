@@ -72,12 +72,30 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
     private final MongoDatabase database;
     private final String metaCollectionName;
     private final int scanBatchSize;
+    /** 是否拥有连接生命周期：共享外部 MongoClient 时为 false，close() 不得代关 */
+    private final boolean ownsClient;
     /** 已执行过 DDL（建索引）的集合缓存：ensureStore 在每次批量写都会调用，避免重复往返 */
     private final Set<String> ensuredCollections = ConcurrentHashMap.newKeySet();
 
     public MongoVectorDocumentRepository(VectorLiteProperties properties) {
         VectorLiteProperties.MongoConfig config = properties.getStorage().getMongodb();
         this.mongoClient = MongoClients.create(new ConnectionString(config.getUri()));
+        this.ownsClient = true;
+        this.database = mongoClient.getDatabase(config.getDatabase());
+        this.metaCollectionName = config.getMetaCollection();
+        this.scanBatchSize = config.getScanBatchSize() > 0 ? config.getScanBatchSize() : 1000;
+        ensureSchema();
+    }
+
+    /**
+     * 复用外部共享 {@link MongoClient} 的构造器：自动配置把同一个客户端同时交给
+     * 向量仓储与 Embedding 模型存储，避免各建一个连接池（启动即双连接）。
+     * 客户端生命周期归调用方所有，本类 close() 不关闭连接。
+     */
+    public MongoVectorDocumentRepository(MongoClient mongoClient, VectorLiteProperties properties) {
+        VectorLiteProperties.MongoConfig config = properties.getStorage().getMongodb();
+        this.mongoClient = mongoClient;
+        this.ownsClient = false;
         this.database = mongoClient.getDatabase(config.getDatabase());
         this.metaCollectionName = config.getMetaCollection();
         this.scanBatchSize = config.getScanBatchSize() > 0 ? config.getScanBatchSize() : 1000;
@@ -87,6 +105,7 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
     MongoVectorDocumentRepository(MongoClient mongoClient, MongoDatabase database,
                                   String documentCollectionName, String metaCollectionName, int scanBatchSize) {
         this.mongoClient = mongoClient;
+        this.ownsClient = false;
         this.database = database;
         this.metaCollectionName = metaCollectionName;
         this.scanBatchSize = scanBatchSize > 0 ? scanBatchSize : 1000;
@@ -256,7 +275,9 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
 
     @Override
     public void close() {
-        mongoClient.close();
+        if (ownsClient) {
+            mongoClient.close();
+        }
     }
 
     private MongoCollection<Document> documents(String storeName) {

@@ -36,17 +36,34 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
 
     private final MongoClient mongoClient;
     private final MongoCollection<Document> collection;
+    /** 是否拥有连接生命周期：共享外部 MongoClient 时为 false，close() 不得代关 */
+    private final boolean ownsClient;
 
     public MongoEmbeddingModelStore(VectorLiteProperties properties) {
         VectorLiteProperties.MongoConfig config = properties.getStorage().getMongodb();
         this.mongoClient = MongoClients.create(new ConnectionString(config.getUri()));
+        this.ownsClient = true;
         MongoDatabase database = mongoClient.getDatabase(config.getDatabase());
         this.collection = database.getCollection(config.getEmbeddingModelCollection());
         migrateIndexes();
     }
 
+    /**
+     * 复用外部共享 {@link MongoClient} 的构造器：与向量仓储共用同一连接池，
+     * 客户端生命周期归调用方所有，本类 close() 不关闭连接。
+     */
+    public MongoEmbeddingModelStore(MongoClient mongoClient, VectorLiteProperties properties) {
+        VectorLiteProperties.MongoConfig config = properties.getStorage().getMongodb();
+        this.mongoClient = mongoClient;
+        this.ownsClient = false;
+        this.collection = mongoClient.getDatabase(config.getDatabase())
+                .getCollection(config.getEmbeddingModelCollection());
+        migrateIndexes();
+    }
+
     MongoEmbeddingModelStore(MongoCollection<Document> collection, MongoClient mongoClient) {
         this.mongoClient = mongoClient;
+        this.ownsClient = false;
         this.collection = collection;
     }
 
@@ -142,6 +159,8 @@ public class MongoEmbeddingModelStore implements EmbeddingModelStore {
     }
 
     public void close() {
-        mongoClient.close();
+        if (ownsClient) {
+            mongoClient.close();
+        }
     }
 }

@@ -36,7 +36,6 @@ export const api = {
   searchText: (name, body) => post(`/stores/${encodeURIComponent(name)}/search/text`, body),
   reload: (name) => post(`/stores/${encodeURIComponent(name)}/reload`),
   reconcile: (name) => post(`/stores/${encodeURIComponent(name)}/reconcile`),
-  sync: (name) => post(`/stores/${encodeURIComponent(name)}/sync`),
   embeddingModels: () => request('/embedding/models'),
   saveEmbeddingModel: (model) => post('/embedding/models', model),
   deleteEmbeddingModel: (name, version) =>

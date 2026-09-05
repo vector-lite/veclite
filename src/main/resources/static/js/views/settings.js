@@ -15,16 +15,16 @@ export async function renderSettings(container) {
 
   container.appendChild(el(`
     <div class="page-header">
-      <div>
-        <h1 class="page-title">数据源管理</h1>
-      </div>
-      <button class="btn btn-primary" data-action="add-model">${icons.plus()} 新增数据源</button>
+      <h1 class="page-title">数据源管理</h1>
     </div>
   `));
 
   const card = el(`
     <div class="panel">
-      <div class="panel-header">Embedding 数据源 <span class="counter" data-role="count">0</span></div>
+      <div class="panel-header">
+        Embedding 数据源 <span class="counter" data-role="count">0</span>
+        <button class="btn btn-primary" data-action="add-model" style="margin-left:auto">${icons.plus()} 新增数据源</button>
+      </div>
       <div data-role="body" style="min-height:80px"></div>
     </div>
   `);

@@ -40,8 +40,7 @@ export async function renderStore(container, storeName, tab = 'documents') {
         </div>
       </div>
       <div style="display:flex;gap:6px">
-        <button class="btn" data-op="sync" title="按水位从真相源拉取增量变更应用到内存（多节点部署下由调度器定时执行）">${icons.download()} 增量同步</button>
-        <button class="btn" data-op="reconcile" title="以内存为权威修复真相源漂移：补齐缺失行、软删滞留行">${icons.download()} 对账修复</button>
+        <button class="btn" data-op="reconcile" title="以内存为权威修复真相源漂移：补齐缺失行、软删滞留行">${icons.download()} 对账</button>
         <button class="btn" data-op="reload" title="从真相源全量重建内存，并建立增量同步水位基线">${icons.upload()} 重载</button>
         <button class="btn btn-danger" data-op="drop">${icons.trash()} 删除</button>
       </div>
@@ -60,12 +59,6 @@ export async function renderStore(container, storeName, tab = 'documents') {
   const body = el('<div></div>');
   container.appendChild(body);
 
-  container.querySelector('[data-op=sync]').addEventListener('click', async () => {
-    try {
-      const result = await api.sync(storeName);
-      showSyncResult(storeName, result);
-    } catch (e) { toast(e.message, true); }
-  });
   container.querySelector('[data-op=reconcile]').addEventListener('click', async () => {
     const ok = await confirmModal(
       `对账将以「${storeName}」的内存数据为权威修复真相源：补齐缺失行、软删滞留行。多节点部署下请确认本节点内存是最新权威。`,
@@ -107,28 +100,6 @@ export async function renderStore(container, storeName, tab = 'documents') {
 
 /* ================= 数据一致性结果展示 ================= */
 
-/** 把后端 Instant（ISO 字符串）转成本地可读时间；空值显示占位符 */
-function formatWatermark(instant) {
-  if (!instant) return '—';
-  const date = new Date(instant);
-  return isNaN(date) ? escapeHtml(instant) : date.toLocaleString();
-}
-
-/** 弹窗展示增量同步结果（StoreSyncResult：appliedUpserts / appliedDeletes / watermark） */
-function showSyncResult(storeName, result) {
-  const content = el(`
-    <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
-      <div>向量库「${escapeHtml(storeName)}」本次从真相源应用的增量：</div>
-      <div style="display:flex;gap:16px">
-        <span class="pill pill-success">新增/更新 ${result.appliedUpserts} 条</span>
-        <span class="pill ${result.appliedDeletes ? 'pill-warn' : ''}">删除 ${result.appliedDeletes} 条</span>
-        <span class="pill">水位推进到 ${formatWatermark(result.watermark)}</span>
-      </div>
-      <div style="color:var(--fg-muted)">两项均为 0 说明内存与真相源在本水位内一致，无需处理。</div>
-    </div>`);
-  openModal({ title: '增量同步结果', content, footer: [{ label: '关闭' }] });
-}
-
 /** 弹窗展示集合级对账结果（ReconcileResult：双向修复条数、样本 ID、耗时） */
 function showReconcileResult(storeName, result) {
   const sampleList = (ids, color) => !ids || !ids.length
@@ -167,7 +138,6 @@ async function renderDocuments(container, storeName, stats) {
         <span class="cell-muted" style="font-size:13px">共 <b class="mono" data-role="total-count">${stats.docCount}</b> 条文档</span>
         <div class="spacer"></div>
         <button class="btn" data-action="seed-docs">随机入库</button>
-        <button class="btn" data-action="delete-docs">${icons.trash()} 删除文档</button>
         <button class="btn btn-primary" data-action="insert-doc">${icons.plus()} 插入文档</button>
       </div>
       <div class="panel" data-role="table"></div>
@@ -177,7 +147,6 @@ async function renderDocuments(container, storeName, stats) {
 
   wrap.querySelector('[data-action=seed-docs]').addEventListener('click', () => seedDocsDialog());
   wrap.querySelector('[data-action=insert-doc]').addEventListener('click', () => insertDocDialog());
-  wrap.querySelector('[data-action=delete-docs]').addEventListener('click', () => deleteDocsDialog());
 
   await draw();
 
@@ -201,9 +170,9 @@ async function renderDocuments(container, storeName, stats) {
           <table class="table">
             <thead><tr>
               <th style="width:20%">ID</th>
-              <th>文本</th>
+              <th>向量化文本</th>
               <th style="width:70px;text-align:center">向量</th>
-              <th style="width:28%">Metadata</th>
+              <th style="width:28%">metadata</th>
               <th style="width:50px"></th>
             </tr></thead>
             <tbody>
@@ -458,26 +427,6 @@ async function renderDocuments(container, storeName, stats) {
     } catch (e) { toast(e.message, true); }
   }
 
-  async function deleteDocsDialog() {
-    const values = await formModal({
-      title: `批量删除文档 → ${storeName}`,
-      okLabel: '删除',
-      fields: [
-        { name: 'ids', label: '文档 ID 列表', type: 'textarea', rows: 4, mono: true, placeholder: 'id-1, id-2, …（逗号或换行分隔）' },
-      ],
-    });
-    if (!values || !values.ids) return;
-    const ids = values.ids.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean);
-    if (ids.length === 0) { toast('请输入至少一个文档 ID', true); return; }
-    if (!(await confirmModal(`确定删除 ${ids.length} 条文档？`, { danger: true, okLabel: '删除' }))) return;
-
-    try {
-      const result = await api.deleteDocuments(storeName, ids);
-      toast(`已删除 ${result.deletedCount ?? ids.length} 条文档`);
-      draw();
-    } catch (e) { toast(e.message, true); }
-  }
-
   function seedDocsDialog() {
     const content = el(`
       <div>
@@ -632,7 +581,7 @@ function renderSearchDebug(container, storeName, stats) {
       <div style="padding:16px">
         <div class="toolbar" style="margin-bottom:10px">
           <div style="display:flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
-            <button class="btn" data-mode="text" style="border:none;border-radius:0">文本查询</button>
+            <button class="btn" data-mode="text" style="border:none;border-radius:0">文本向量化查询</button>
             <button class="btn" data-mode="vector" style="border:none;border-radius:0">向量查询</button>
           </div>
           <label class="mono" style="font-size:12px;color:var(--fg-muted);display:flex;align-items:center;gap:6px">
@@ -641,10 +590,9 @@ function renderSearchDebug(container, storeName, stats) {
           <div style="display:flex;align-items:center;gap:6px">
             <span class="mono" style="font-size:12px;color:var(--fg-muted)">得分计算:</span>
             <select class="select" data-role="score-expr-select" style="font-size:12px;padding:3px 8px;height:28px">
-              <option value="none">不归一化 (原始得分)</option>
-              <option value="score * 2.0 - 1.0">score * 2.0 - 1.0</option>
-              <option value="(score + 1.0) / 2.0">ES 余弦归一化 ((score + 1) / 2)</option>
-              <option value="custom">自定义表达式...</option>
+              <option value="none">原始得分</option>
+              <option value="(score + 1.0) / 2.0" selected>余弦归一化((score + 1.0) / 2.0)</option>
+              <option value="custom">自定义</option>
             </select>
             <input class="input mono" data-role="custom-score-expr" placeholder="如 score * 100" style="display:none;width:140px;font-size:12px;padding:3px 8px;height:28px">
           </div>
@@ -652,7 +600,7 @@ function renderSearchDebug(container, storeName, stats) {
         </div>
 
         <div data-role="query-area">
-          <label class="field"><span>查询文本</span>
+          <label class="field">
             <input class="input input-full" data-role="query-text" placeholder="例如：如何检索语义相似的内容">
           </label>
         </div>
@@ -666,9 +614,9 @@ function renderSearchDebug(container, storeName, stats) {
           <div class="filter-rows" data-role="filters"></div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn" data-action="add-filter">${icons.plus()} 添加元数据过滤</button>
+          <button class="btn" data-action="add-filter">${icons.plus()} metadata过滤</button>
           <div class="spacer" style="flex:1"></div>
-          <button class="btn btn-primary" data-action="run-search">${icons.search(14)} 执行查询</button>
+          <button class="btn btn-primary" data-action="run-search">${icons.search(14)} 查询</button>
         </div>
       </div>
     </div>
@@ -704,12 +652,12 @@ function renderSearchDebug(container, storeName, stats) {
     });
     if (mode === 'text') {
       queryArea.innerHTML = `
-        <label class="field"><span>查询文本</span>
+        <label class="field">
           <input class="input input-full" data-role="query-text" placeholder="例如：如何检索语义相似的内容">
         </label>`;
     } else {
       queryArea.innerHTML = `
-        <label class="field"><span>查询向量</span>
+        <label class="field">
           <textarea class="input input-full mono" data-role="query-vector" rows="3" placeholder="[0.1, 0.2, …]"></textarea>
         </label>`;
     }

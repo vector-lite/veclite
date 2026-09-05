@@ -9,7 +9,7 @@ veclite:
   # Embedding 数据源已改为数据库维护：通过数据源管理页或 /embedding/models 接口增删改查
   storage:
     # 数据库持久化后端全局开关：MONGODB | POSTGRES
-    type: POSTGRES
+    type: MONGODB
     mongodb:                  # type=MONGODB 时生效
       uri: mongodb://admin:12345678@localhost:27017/?authSource=admin
       database: veclite
@@ -43,5 +43,5 @@ springdoc:
 
 logging:
   level:
-    veclite.persistence.AbstractDocumentPersistence: debug
-    veclite.engine.StoreSyncScheduler: debug
+    veclite.persistence.AbstractDocumentPersistence: info
+    veclite.engine.StoreSyncScheduler: info

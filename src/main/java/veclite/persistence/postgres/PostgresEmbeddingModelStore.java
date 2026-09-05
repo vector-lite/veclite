@@ -1,7 +1,7 @@
 package veclite.persistence.postgres;
 
+import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import veclite.config.VectorLiteProperties;
 import veclite.embedding.EmbeddingModelRef;
 import veclite.embedding.EmbeddingModelStore;
@@ -30,25 +30,28 @@ public class PostgresEmbeddingModelStore implements EmbeddingModelStore {
 
     private final JdbcTemplate jdbc;
     private final String modelTable;
+    /** 独立构造自建的数据源：为 Hikari 连接池时由 close() 负责释放；注入数据源则生命周期归调用方 */
+    private final DataSource ownedDataSource;
 
+    /**
+     * 自建 Hikari 连接池数据源（见 {@link PostgresDataSources}），close() 负责释放；
+     * Spring 装配路径由自动配置注入共享数据源 Bean，走 {@link #PostgresEmbeddingModelStore(VectorLiteProperties, DataSource)}。
+     */
     public PostgresEmbeddingModelStore(VectorLiteProperties properties) {
-        this(properties, createDataSource(properties));
-    }
-
-    public PostgresEmbeddingModelStore(VectorLiteProperties properties, DataSource dataSource) {
         VectorLiteProperties.PostgresConfig config = properties.getStorage().getPostgres();
-        this.jdbc = new JdbcTemplate(dataSource);
+        this.ownedDataSource = PostgresDataSources.createPooledDataSource(properties);
+        this.jdbc = new JdbcTemplate(ownedDataSource);
         this.modelTable = config.getEmbeddingModelTable();
         ensureSchema();
     }
 
-    private static DataSource createDataSource(VectorLiteProperties properties) {
+    /** 注入外部数据源（如自动配置的共享池 Bean），生命周期归调用方所有，close() 不代关 */
+    public PostgresEmbeddingModelStore(VectorLiteProperties properties, DataSource dataSource) {
         VectorLiteProperties.PostgresConfig config = properties.getStorage().getPostgres();
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
-        dataSource.setUrl(config.getJdbcUrl());
-        dataSource.setUsername(config.getUsername());
-        dataSource.setPassword(config.getPassword());
-        return dataSource;
+        this.ownedDataSource = null;
+        this.jdbc = new JdbcTemplate(dataSource);
+        this.modelTable = config.getEmbeddingModelTable();
+        ensureSchema();
     }
 
     private void ensureSchema() {
@@ -128,8 +131,14 @@ public class PostgresEmbeddingModelStore implements EmbeddingModelStore {
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    /** 无连接池需要释放，生命周期随注入的数据源 */
+    /**
+     * 释放自建数据源。独立构造时内置数据源是 {@link com.zaxxer.hikari.HikariDataSource}
+     * 连接池，必须显式关闭；注入数据源时生命周期归调用方所有，此处不代关
+     * （与 {@link PostgresVectorDocumentRepository}#close 语义一致）。
+     */
     public void close() {
-        // 与 PostgresVectorDocumentRepository#close 一致：内置数据源不含连接池
+        if (ownedDataSource instanceof HikariDataSource hikari) {
+            hikari.close();
+        }
     }
 }

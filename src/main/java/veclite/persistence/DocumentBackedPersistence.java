@@ -28,7 +28,7 @@ public interface DocumentBackedPersistence extends VectorPersistenceStorage {
     /** 从真相源软删除指定文档（tombstone 保留，供其他节点增量感知；ID 不存在时静默跳过） */
     void deleteDocuments(String storeName, List<String> documentIds);
 
-    /** 保存/更新 Store 元数据（定义配置、persistenceMode、SQ8 冻结参数、activeCount、同步水位） */
+    /** 保存/更新 Store 元数据（定义配置、SQ8 冻结参数、activeCount、同步水位） */
     void saveStoreMetadata(LocalVectorStore store);
 
     /**

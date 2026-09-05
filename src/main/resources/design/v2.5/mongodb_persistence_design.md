@@ -63,7 +63,6 @@ db.veclite_document.createIndex({ store_name: 1, doc_id: 1 }, { unique: true })
 | `store_name` | 主键 |
 | `dimension` / `metric` / `max_capacity` / `embedding_model` / `quantization` / `indexed_metadata_fields` | 与 `VectorStoreDefinition` 对齐 |
 | `active_count` | 有效向量条数（异步/批量后更新，供管理侧展示，不作为正确性依据） |
-| `persistence_mode` | **数据位置记录**（见 §3.2）：`MONGODB` / `SNAPSHOT_FILE` / `HYBRID` |
 | `sq8_min_per_dim` / `sq8_scale_per_dim` | BinData：SQ8 冻结态的逐维量化参数（Float32 小端），与文档的 `vector_format: SQ8` 配套，装载时经 `restoreFrozenParams` 注入实现位级精确往返 |
 | `created_at` / `updated_at` | 时间戳 |
 
@@ -109,20 +108,7 @@ veclite:
 2. 两种方案的**数据位置完全不同**（MongoDB 方案数据在 Mongo 集合；HYBRID 方案数据在 OSS 快照），按 Store 混用意味着同一个系统里存在两套数据目录、两条恢复路径、两套运维与备份策略，故障面翻倍。
 3. "哪个 Store 用哪套"本身也需要一个真相源，问题被外推而非消解。
 
-**修正后的语义**：`persistence_mode` 仍然存在于 Store 元数据中，但它是**系统维护的"数据位置记录"，不是调用方的选择参数**：
-
-- 写入路径：Store 数据实际落在哪个后端，系统就把它记录为哪个值（由当前全局 `storage.type` 决定）。
-- 读取路径：启动装载时按该记录选择后端——**即使全局开关已切到 MONGODB，仍能识别并加载历史上落在 SNAPSHOT_FILE 的存量库**，不会因为一键切换导致存量数据"失明"。
-- 迁移路径：全局开关 + 每库记录组合，支持灰度迁移（见 §3.3）。
-
-### 3.3 迁移路径（SNAPSHOT_FILE → MONGODB）
-
-1. 配置切 `storage.type: MONGODB`，重启。
-2. 启动发现阶段：先查 MongoDB `veclite_store_meta`，再扫描本地快照目录；对本地存在但 Mongo 中无记录（或 `persistence_mode != MONGODB`）的 Store，按快照装载进内存，元数据登记进 Mongo 并标记 `persistence_mode: SNAPSHOT_FILE`。
-3. 提供 `migrateStore(storeName)` 管理端点：将该 Store 全量文档以 batch 写入 `veclite_document`，成功后将 `persistence_mode` 翻转为 `MONGODB`。
-4. `persistence_mode` 为 `MONGODB` 后，写入走 Mongo，本地旧快照目录异步清理。
-
-未迁移的库在 MONGODB 模式下仍以"快照为真相 + 内存写暂停或透写快照"运行，直至逐库迁移完成；建议迁移窗口内冻结写入或接受该库 RPO 退化为快照间隔。
+**最终结论**：不引入任何按 Store 的持久化参数或数据位置记录——一个部署实例只配置一个后端，全部 Store 从当前配置的后端装载；后端切换属于重新初始化数据的部署操作，不在 SDK 运行时内做迁移。
 
 ---
 
@@ -145,9 +131,9 @@ MongoVectorDocumentRepository     PostgresVectorDocumentRepository（未来实�
 | `VectorDocumentRepository` 方法 | PostgreSQL 实现（示意 DDL） |
 | --- | --- |
 | `upsertBatch` / `scan` / `deleteByIds` / `count` / `listDocumentIds` | `veclite_document` 表（`store_name`+`doc_id` 主键, `vector BYTEA`, `vector_format VARCHAR`, `metadata JSONB`, JDBC batch） |
-| `saveStoreMetadata` / `findStoreMetadata` / `listStoreMetadata` | `veclite_store_meta` 表（v2.4 稿 §4.1 DDL 可直接复用, 增加 `persistence_mode` 列） |
+| `saveStoreMetadata` / `findStoreMetadata` / `listStoreMetadata` | `veclite_store_meta` 表（v2.4 稿 §4.1 DDL 可直接复用） |
 
-新增 PostgreSQL 支持的完整步骤：① 实现 `PostgresVectorDocumentRepository`；② `StorageType` 增加 `POSTGRES`；③ `VectorLiteAutoConfiguration` 装配分支加一个 case。引擎层与编排层零改动，`persistence_mode` 数据位置记录语义（§3.2）对 PostgreSQL 同样适用。
+新增 PostgreSQL 支持的完整步骤：① 实现 `PostgresVectorDocumentRepository`；② `StorageType` 增加 `POSTGRES`；③ `VectorLiteAutoConfiguration` 装配分支加一个 case。引擎层与编排层零改动。
 
 ## 4. 写入路径
 
@@ -173,20 +159,18 @@ upsert / upsertBatch
 启动
  │
  ▼
-listAll(): 读 veclite_store_meta + 扫描本地快照目录（双发现, 见 §3.3）
+listAll(): 读 veclite_store_meta（发现存量 Store）
  │
  ▼
 逐 Store 并行装载（CompletableFuture 线程池）:
- ├─ persistence_mode == MONGODB
- │    ├─ L1: 本地快照缓存命中且 manifest 校验通过 → mmap 零拷贝装载（毫秒级）
- │    │       缓存版本 stale 时可选: 先服务旧缓存 + 后台刷新缓存（v2.5 可不做, 直接 L3）
- │    └─ L3: Mongo 游标流式读 veclite_document（batchSize 500~1000）
- │           → 向量直接写入 FloatVectorBuffer
- │           → payload 写入 MMapPayloadStorage / 堆
- │           → metadata 建 MetadataFilterIndex 位图
- │           → 全量装载完成后 SQ8 校准 + 冻结（亚秒级, 单遍统计）
- │           → 异步刷新本地快照缓存
- └─ persistence_mode == SNAPSHOT_FILE → 现有 SnapshotFileStorage.loadStore
+ ├─ L1: 本地快照缓存命中且 manifest 校验通过 → mmap 零拷贝装载（毫秒级）
+ │       缓存版本 stale 时可选: 先服务旧缓存 + 后台刷新缓存（v2.5 可不做, 直接 L3）
+ └─ L3: Mongo 游标流式读 veclite_document（batchSize 500~1000）
+         → 向量直接写入 FloatVectorBuffer
+         → payload 写入 MMapPayloadStorage / 堆
+         → metadata 建 MetadataFilterIndex 位图
+         → 全量装载完成后 SQ8 校准 + 冻结（亚秒级, 单遍统计）
+         → 异步刷新本地快照缓存
 ```
 
 预期恢复耗时：本地缓存命中毫秒级；Mongo 全量重建 5w 条 / 300MB 约 2~5 秒（内网 + BinData 无膨胀解码）。**缓存地位是"尽力而为"**：损坏、版本不符、缺失一律丢弃走 L3，不存在缓存一致性协议。
@@ -196,7 +180,7 @@ listAll(): 读 veclite_store_meta + 扫描本地快照目录（双发现, 见 §
 | 改动 | 包/类 | 说明 |
 | --- | --- | --- |
 | `StorageType` 增加 `MONGODB`、预留 `HYBRID` | `veclite.model` | 全局开关枚举 |
-| `VectorStoreMetadata`（新） | `veclite.api` | Store 级元数据 DTO，含 `persistenceMode` 与 SQ8 参数，提供 `fromDefinition`/`toDefinition` |
+| `VectorStoreMetadata`（新） | `veclite.api` | Store 级元数据 DTO，含 SQ8 参数，提供 `fromDefinition`/`toDefinition` |
 | `VectorStorageFormat`（新） | `veclite.persistence` | 向量落库格式：`FLOAT32`（写透路径）/ `SQ8`（冻结态全量对账） |
 | `VectorDocumentEntity`（新） | `veclite.persistence` | 存储无关文档实体，含 `float[] ↔ byte[]` 小端编解码 |
 | `VectorDocumentRepository`（新，端口） | `veclite.persistence` | 数据源端口（§3.4 扩展点），未来 PostgreSQL 实现此接口 |

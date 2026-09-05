@@ -7,12 +7,10 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import veclite.api.VectorStoreMetadata;
 import veclite.config.VectorLiteProperties;
 import veclite.model.QuantizationType;
-import veclite.model.StorageType;
 import veclite.persistence.VectorDocumentEntity;
 import veclite.persistence.VectorDocumentRepository;
 import veclite.persistence.VectorStorageFormat;
 import veclite.persistence.StoreNameValidator;
-import veclite.persistence.StorePersistenceHandle;
 
 import javax.sql.DataSource;
 import java.sql.Timestamp;
@@ -57,7 +55,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
     private static final String META_EMBEDDING_MODEL_VERSION = "embedding_model_version";
     private static final String META_QUANTIZATION = "quantization";
     private static final String META_INDEXED_FIELDS = "indexed_metadata_fields";
-    private static final String META_PERSISTENCE_MODE = "persistence_mode";
     private static final String META_ACTIVE_COUNT = "active_count";
     private static final String META_SQ8_MIN = "sq8_min_per_dim";
     private static final String META_SQ8_SCALE = "sq8_scale_per_dim";
@@ -110,7 +107,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
                 + META_EMBEDDING_MODEL_VERSION + "  VARCHAR(64), "
                 + META_QUANTIZATION + "             VARCHAR(32) NOT NULL DEFAULT 'NONE', "
                 + META_INDEXED_FIELDS + "           JSONB, "
-                + META_PERSISTENCE_MODE + "         VARCHAR(32), "
                 + META_ACTIVE_COUNT + "             INT DEFAULT 0, "
                 + META_SQ8_MIN + "                  BYTEA, "
                 + META_SQ8_SCALE + "                BYTEA, "
@@ -122,7 +118,7 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
     }
 
     @Override
-    public StorePersistenceHandle ensureStore(String storeName) {
+    public void ensureStore(String storeName) {
         StoreNameValidator.validate(storeName);
         String table = storeName;
         if (ensuredTables.add(table)) {
@@ -140,13 +136,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
             jdbc.execute("CREATE INDEX IF NOT EXISTS \"" + table + "_updated_at_idx\" ON \""
                     + table + "\" (" + FIELD_UPDATED_AT + ")");
         }
-        return new StorePersistenceHandle(storeName, table);
-    }
-
-    @Override
-    public StorePersistenceHandle handle(String storeName) {
-        StoreNameValidator.validate(storeName);
-        return new StorePersistenceHandle(storeName, storeName);
     }
 
     @Override
@@ -162,7 +151,7 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
         if (entities == null || entities.isEmpty()) {
             return;
         }
-        String table = ensureStore(storeName).physicalName();
+        String table = storeName;
         String sql = "INSERT INTO \"" + table + "\" ("
                 + FIELD_DOC_ID + ", " + FIELD_DOC_TEXT + ", " + FIELD_METADATA + ", "
                 + FIELD_VECTOR + ", " + FIELD_UPDATED_AT + ", " + FIELD_DELETED + ") "
@@ -200,7 +189,7 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
             List<String> chunk = documentIds.subList(from, to);
             String placeholders = String.join(",", Collections.nCopies(chunk.size(), "?"));
             Object[] args = chunk.toArray();
-            marked += jdbc.update("UPDATE \"" + handle(storeName).physicalName()
+            marked += jdbc.update("UPDATE \"" + storeName
                     + "\" SET " + FIELD_DELETED + " = TRUE, " + FIELD_UPDATED_AT + " = CURRENT_TIMESTAMP"
                     + " WHERE " + FIELD_DOC_ID + " IN (" + placeholders + ")", args);
         }
@@ -209,7 +198,7 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
 
     @Override
     public long deleteAll(String storeName) {
-        return jdbc.update("DELETE FROM \"" + handle(storeName).physicalName() + "\"", new Object[0]);
+        return jdbc.update("DELETE FROM \"" + storeName + "\"", new Object[0]);
     }
 
     @Override
@@ -224,27 +213,27 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
 
     @Override
     public long countUpdatedSince(String storeName, Instant watermark) {
-        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM \"" + handle(storeName).physicalName()
+        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM \"" + storeName
                 + "\" WHERE " + FIELD_UPDATED_AT + " > ?", Long.class, Timestamp.from(watermark));
         return count != null ? count : 0L;
     }
 
     @Override
     public long purgeSoftDeletedBefore(String storeName, Instant cutoff) {
-        return jdbc.update("DELETE FROM \"" + handle(storeName).physicalName()
+        return jdbc.update("DELETE FROM \"" + storeName
                 + "\" WHERE " + FIELD_DELETED + " = TRUE AND " + FIELD_UPDATED_AT + " < ?",
                 Timestamp.from(cutoff));
     }
 
     @Override
     public List<String> listDocumentIds(String storeName) {
-        return jdbc.queryForList("SELECT " + FIELD_DOC_ID + " FROM \"" + handle(storeName).physicalName()
+        return jdbc.queryForList("SELECT " + FIELD_DOC_ID + " FROM \"" + storeName
                 + "\" WHERE " + FIELD_DELETED + " = FALSE", String.class);
     }
 
     @Override
     public long count(String storeName) {
-        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM \"" + handle(storeName).physicalName()
+        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM \"" + storeName
                 + "\"", Long.class);
         return count != null ? count : 0L;
     }
@@ -254,10 +243,10 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
         String sql = "INSERT INTO " + metaTable + " ("
                 + FIELD_STORE_NAME + ", " + META_DIMENSION + ", " + META_METRIC + ", " + META_MAX_CAPACITY + ", "
                 + META_EMBEDDING_MODEL + ", " + META_EMBEDDING_MODEL_VERSION + ", " + META_QUANTIZATION + ", "
-                + META_INDEXED_FIELDS + ", " + META_PERSISTENCE_MODE + ", " + META_ACTIVE_COUNT + ", "
+                + META_INDEXED_FIELDS + ", " + META_ACTIVE_COUNT + ", "
                 + META_SQ8_MIN + ", " + META_SQ8_SCALE + ", " + META_CREATED_AT + ", " + FIELD_UPDATED_AT + ", "
                 + META_SYNC_WATERMARK + ") "
-                + "VALUES (?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?) "
+                + "VALUES (?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?) "
                 + "ON CONFLICT (" + FIELD_STORE_NAME + ") DO UPDATE SET "
                 + META_DIMENSION + "=EXCLUDED." + META_DIMENSION + ", "
                 + META_METRIC + "=EXCLUDED." + META_METRIC + ", "
@@ -266,7 +255,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
                 + META_EMBEDDING_MODEL_VERSION + "=EXCLUDED." + META_EMBEDDING_MODEL_VERSION + ", "
                 + META_QUANTIZATION + "=EXCLUDED." + META_QUANTIZATION + ", "
                 + META_INDEXED_FIELDS + "=EXCLUDED." + META_INDEXED_FIELDS + ", "
-                + META_PERSISTENCE_MODE + "=EXCLUDED." + META_PERSISTENCE_MODE + ", "
                 + META_ACTIVE_COUNT + "=EXCLUDED." + META_ACTIVE_COUNT + ", "
                 + META_SQ8_MIN + "=EXCLUDED." + META_SQ8_MIN + ", "
                 + META_SQ8_SCALE + "=EXCLUDED." + META_SQ8_SCALE + ", "
@@ -284,7 +272,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
                 metadata.getEmbeddingModelVersion(),
                 metadata.getQuantization() != null ? metadata.getQuantization().name() : QuantizationType.NONE.name(),
                 toJson(metadata.getIndexedMetadataFields()),
-                metadata.getPersistenceMode() != null ? metadata.getPersistenceMode().name() : StorageType.POSTGRES.name(),
                 metadata.getActiveCount(),
                 metadata.getSq8MinPerDim() != null ? VectorDocumentEntity.encodeVector(metadata.getSq8MinPerDim()) : null,
                 metadata.getSq8ScalePerDim() != null ? VectorDocumentEntity.encodeVector(metadata.getSq8ScalePerDim()) : null,
@@ -317,7 +304,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
         metadata.setEmbeddingModelVersion(rs.getString(META_EMBEDDING_MODEL_VERSION));
         metadata.setQuantization(parseQuantization(rs.getString(META_QUANTIZATION)));
         metadata.setIndexedMetadataFields(fromJsonList(rs.getString(META_INDEXED_FIELDS)));
-        metadata.setPersistenceMode(parseStorageType(rs.getString(META_PERSISTENCE_MODE)));
         metadata.setActiveCount(rs.getInt(META_ACTIVE_COUNT));
         byte[] sq8Min = rs.getBytes(META_SQ8_MIN);
         byte[] sq8Scale = rs.getBytes(META_SQ8_SCALE);
@@ -364,17 +350,6 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
             return QuantizationType.valueOf(name);
         } catch (IllegalArgumentException e) {
             throw new IllegalStateException("Unknown quantization type in store metadata: " + name, e);
-        }
-    }
-
-    private StorageType parseStorageType(String name) {
-        if (name == null) {
-            return StorageType.POSTGRES;
-        }
-        try {
-            return StorageType.valueOf(name);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalStateException("Unknown persistence mode in store metadata: " + name, e);
         }
     }
 
@@ -449,7 +424,7 @@ public class PostgresVectorDocumentRepository implements VectorDocumentRepositor
                     .append(FIELD_DOC_ID).append(", ").append(FIELD_DOC_TEXT).append(", ")
                     .append(FIELD_METADATA).append(", ").append(FIELD_VECTOR).append(", ")
                     .append(FIELD_UPDATED_AT).append(", ").append(FIELD_DELETED)
-                    .append(" FROM \"").append(handle(storeName).physicalName()).append("\"")
+                    .append(" FROM \"").append(storeName).append("\"")
                     .append(" WHERE 1=1");
             List<Object> args = new ArrayList<>();
             if (updatedAfter != null) {

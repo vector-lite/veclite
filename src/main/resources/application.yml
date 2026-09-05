@@ -9,7 +9,7 @@ veclite:
   # Embedding 数据源已改为数据库维护：通过数据源管理页或 /embedding/models 接口增删改查
   storage:
     # 数据库持久化后端全局开关：MONGODB | POSTGRES
-    type: MONGODB
+    type: POSTGRES
     mongodb:                  # type=MONGODB 时生效
       uri: mongodb://admin:12345678@localhost:27017/?authSource=admin
       database: veclite
@@ -28,7 +28,7 @@ veclite:
     # 替代定时全量重载；多节点部署建议开启。写透已保证 RPO=0，单节点部署无需开启。
     sync:
       enabled: true
-      interval-seconds: 5
+      interval-seconds: 10
       retention-days: 3       # 软删除 tombstone 物理保留天数，<=0 不清理
   # 数据库写入前是否强制校验 vec / payload / idIndex 三者 size 一致；
   # true 时校验失败直接抛 ConsistencyException 阻止写入，false 时跳过校验（默认）

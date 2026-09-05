@@ -1,7 +1,6 @@
 package veclite.api;
 
 import veclite.model.QuantizationType;
-import veclite.model.StorageType;
 
 import java.io.Serializable;
 import java.time.Instant;
@@ -12,8 +11,7 @@ import java.util.List;
  * 向量库 Store 级元数据（单一真相源持久化模式下的 Store 注册信息）。
  * <p>
  * 一个 Store 对应一条元数据：既承载 {@link VectorStoreDefinition} 的全部配置，
- * 也记录该 Store 数据的当前位置（{@link #persistenceMode}，系统维护的数据位置记录，
- * 用于全局存储类型切换后仍能识别并加载存量库）以及 SQ8 冻结态的量化参数。
+ * 也记录 SQ8 冻结态的量化参数与增量同步水位。
  */
 public class VectorStoreMetadata implements Serializable {
     private static final long serialVersionUID = 1L;
@@ -26,9 +24,6 @@ public class VectorStoreMetadata implements Serializable {
     private String embeddingModelVersion;
     private QuantizationType quantization = QuantizationType.NONE;
     private List<String> indexedMetadataFields = new ArrayList<>();
-
-    /** 该 Store 数据当前所在的后端（由系统按实际落点写入，不是调用方的选择参数） */
-    private StorageType persistenceMode;
 
     /** 有效向量条数（汇总值，供管理侧展示，不作为正确性依据） */
     private int activeCount;
@@ -43,7 +38,7 @@ public class VectorStoreMetadata implements Serializable {
     /** 增量同步水位：内存投影已消费到的文档 updatedAt；全量装载时以装载开始时间建立基线 */
     private Instant syncWatermark;
 
-    public static VectorStoreMetadata fromDefinition(VectorStoreDefinition definition, StorageType mode) {
+    public static VectorStoreMetadata fromDefinition(VectorStoreDefinition definition) {
         VectorStoreMetadata metadata = new VectorStoreMetadata();
         metadata.setStoreName(definition.getStoreName());
         metadata.setDimension(definition.getDimension());
@@ -53,7 +48,6 @@ public class VectorStoreMetadata implements Serializable {
         metadata.setEmbeddingModelVersion(definition.getEmbeddingModelVersion());
         metadata.setQuantization(definition.getQuantization());
         metadata.setIndexedMetadataFields(definition.getIndexedMetadataFields());
-        metadata.setPersistenceMode(mode);
         return metadata;
     }
 
@@ -86,8 +80,6 @@ public class VectorStoreMetadata implements Serializable {
     public void setQuantization(QuantizationType quantization) { this.quantization = quantization; }
     public List<String> getIndexedMetadataFields() { return indexedMetadataFields; }
     public void setIndexedMetadataFields(List<String> indexedMetadataFields) { this.indexedMetadataFields = indexedMetadataFields; }
-    public StorageType getPersistenceMode() { return persistenceMode; }
-    public void setPersistenceMode(StorageType persistenceMode) { this.persistenceMode = persistenceMode; }
     public int getActiveCount() { return activeCount; }
     public void setActiveCount(int activeCount) { this.activeCount = activeCount; }
     public float[] getSq8MinPerDim() { return sq8MinPerDim; }

@@ -123,15 +123,13 @@ class MongoVectorPersistenceManualTest {
 
     @Test
     @Order(1)
-    @DisplayName("写透 upsert：真相源与内存同步落库，元数据登记 persistenceMode=MONGODB")
+    @DisplayName("写透 upsert：真相源与内存同步落库，元数据登记进真相源")
     void writeThroughUpsertShouldPersistDocuments() {
         client.createStore(STORE_NAME, definition(STORE_NAME, 4, QuantizationType.NONE));
         client.upsertBatch(STORE_NAME, sampleDocs());
 
         assertEquals(3, repository.count(STORE_NAME));
         assertNotNull(repository.findStoreMetadata(STORE_NAME).orElse(null));
-        assertEquals(StorageType.MONGODB,
-                repository.findStoreMetadata(STORE_NAME).get().getPersistenceMode());
     }
 
     @Test
@@ -234,8 +232,6 @@ class MongoVectorPersistenceManualTest {
 
         storage.saveStore(source);
 
-        assertEquals(StorageType.MONGODB,
-                repository.findStoreMetadata(sq8Store).get().getPersistenceMode());
         assertArrayEquals(minPerDim, repository.findStoreMetadata(sq8Store).get().getSq8MinPerDim());
         assertArrayEquals(scalePerDim, repository.findStoreMetadata(sq8Store).get().getSq8ScalePerDim());
 

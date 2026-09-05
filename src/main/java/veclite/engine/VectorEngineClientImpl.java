@@ -88,8 +88,7 @@ public class VectorEngineClientImpl implements VectorEngineClient {
 
     /**
      * 启动双发现：文档型持久化下从真相源元数据中发现存量 Store，
-     * 补齐 properties 配置中未声明的库并按各自 persistenceMode 装载数据，
-     * 保证全局存储类型切换后存量库不"失明"。
+     * 补齐 properties 配置中未声明的库并从当前配置的后端装载数据。
      */
     private void discoverPersistedStores() {
         if (documentPersistence == null) {

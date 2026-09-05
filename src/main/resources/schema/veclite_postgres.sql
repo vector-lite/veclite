@@ -29,7 +29,6 @@ CREATE TABLE IF NOT EXISTS veclite_store_meta (
     embedding_model_version     VARCHAR(64),
     quantization                VARCHAR(32)  NOT NULL DEFAULT 'NONE',
     indexed_metadata_fields     JSONB,
-    persistence_mode            VARCHAR(32),          -- 数据位置记录：MONGODB | POSTGRES | SNAPSHOT_FILE
     active_count                INT          DEFAULT 0,
     sq8_min_per_dim             BYTEA,                -- SQ8 冻结态逐维 min（float[] 小端）
     sq8_scale_per_dim           BYTEA,                -- SQ8 冻结态逐维 scale（float[] 小端）

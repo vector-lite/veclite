@@ -1,7 +1,6 @@
 package veclite.persistence.postgres;
 
 import veclite.config.VectorLiteProperties;
-import veclite.model.StorageType;
 import veclite.persistence.AbstractDocumentPersistence;
 import veclite.persistence.VectorDocumentRepository;
 
@@ -10,11 +9,11 @@ import veclite.persistence.VectorDocumentRepository;
  * <p>
  * 与 {@code MongoVectorPersistenceStorage} 同构：文档（text/metadata/向量）写透落库 RPO=0，
  * 启动时按元数据集合发现存量库并游标重建。编排逻辑由 {@link AbstractDocumentPersistence} 承担，
- * 本类只负责绑定 PostgreSQL 仓储与数据位置标记 {@link StorageType#POSTGRES}。
+ * 本类只负责绑定 PostgreSQL 仓储。
  */
 public class PostgresVectorPersistenceStorage extends AbstractDocumentPersistence {
 
     public PostgresVectorPersistenceStorage(VectorDocumentRepository repository, VectorLiteProperties properties) {
-        super(repository, StorageType.POSTGRES, properties);
+        super(repository, properties);
     }
 }

@@ -119,7 +119,7 @@ class StoreSyncSchedulerTest {
 
     private static final class TestPersistence extends AbstractDocumentPersistence {
         private TestPersistence(VectorDocumentRepository repository) {
-            super(repository, StorageType.POSTGRES, new VectorLiteProperties());
+            super(repository, new VectorLiteProperties());
         }
     }
 }

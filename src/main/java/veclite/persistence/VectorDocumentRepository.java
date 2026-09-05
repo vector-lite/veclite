@@ -17,13 +17,7 @@ import java.util.Optional;
 public interface VectorDocumentRepository {
 
     /** Ensure the physical document resource for one Store exists. */
-    default StorePersistenceHandle ensureStore(String storeName) {
-        return new StorePersistenceHandle(storeName, storeName);
-    }
-
-    /** Resolve the physical document resource for one Store. */
-    default StorePersistenceHandle handle(String storeName) {
-        return new StorePersistenceHandle(storeName, storeName);
+    default void ensureStore(String storeName) {
     }
 
     /** Drop the physical document resource for one Store. */
@@ -75,7 +69,7 @@ public interface VectorDocumentRepository {
 
     Optional<VectorStoreMetadata> findStoreMetadata(String storeName);
 
-    /** 启动时发现全部已注册 Store（按 persistenceMode 决定各自从哪个后端装载） */
+    /** 启动时发现全部已注册 Store（单一真相源：从当前配置的后端装载） */
     List<VectorStoreMetadata> listStoreMetadata();
 
     void deleteStoreMetadata(String storeName);

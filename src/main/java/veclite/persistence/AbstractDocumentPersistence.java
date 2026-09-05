@@ -3,7 +3,6 @@ package veclite.persistence;
 import veclite.api.VectorStoreDefinition;
 import veclite.api.VectorStoreMetadata;
 import veclite.engine.LocalVectorStore;
-import veclite.model.StorageType;
 import veclite.model.StoreSyncResult;
 import veclite.model.VectorDocument;
 import veclite.config.VectorLiteProperties;
@@ -27,8 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 职责分工：真相源持有文档（text/metadata/Float32 原始向量），内存 Store 是它的可重建投影；
  * 量化结构（SQ8 buffer 及其冻结参数）是运行时派生物，文档本体不入真相源为量化格式。
  * 编排逻辑（写透、整库装载、对账、增量同步）与具体存储无关，只依赖
- * {@link VectorDocumentRepository} 端口，因此在这里实现一次，由各存储子类提供仓储与
- * {@link StorageType} 即可。
+ * {@link VectorDocumentRepository} 端口，因此在这里实现一次，由各存储子类提供仓储即可。
  * <ul>
  *   <li><b>写透</b>（{@link #upsertDocuments}）：写路径先提交真相源（RPO=0），成功后再更新内存；</li>
  *   <li><b>整库装载</b>（{@link #loadStore}）：重置内存后从真相源游标式全量重建，
@@ -53,17 +51,14 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
     private static final long PURGE_MIN_INTERVAL_MILLIS = Duration.ofHours(1).toMillis();
 
     private final VectorDocumentRepository repository;
-    private final StorageType storageType;
     private final VectorLiteProperties properties;
 
     /** 每 Store 上次 tombstone 清理时间（毫秒），用于增量同步路径的节流 */
     private final Map<String, Long> lastPurgeAtMillis = new ConcurrentHashMap<>();
 
     protected AbstractDocumentPersistence(VectorDocumentRepository repository,
-                                          StorageType storageType,
                                           VectorLiteProperties properties) {
         this.repository = repository;
-        this.storageType = storageType;
         this.properties = properties;
     }
 
@@ -172,7 +167,7 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
         // 元数据回写：activeCount + 水位基线；真相源尚无元数据时按当前定义补建（首次装载）
         VectorStoreMetadata toSave = metadata != null
                 ? metadata
-                : VectorStoreMetadata.fromDefinition(store.getDefinition(), storageType);
+                : VectorStoreMetadata.fromDefinition(store.getDefinition());
         toSave.setActiveCount(store.getActiveCount());
         toSave.setSyncWatermark(loadStartedAt);
         repository.saveStoreMetadata(toSave);
@@ -424,7 +419,7 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
     }
 
     private VectorStoreMetadata buildMetadata(LocalVectorStore store) {
-        VectorStoreMetadata metadata = VectorStoreMetadata.fromDefinition(store.getDefinition(), storageType);
+        VectorStoreMetadata metadata = VectorStoreMetadata.fromDefinition(store.getDefinition());
         metadata.setActiveCount(store.getActiveCount());
         if (store.isSQ8Enabled() && store.isSQ8Frozen()) {
             metadata.setSq8MinPerDim(store.getSQ8MinPerDim());

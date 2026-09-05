@@ -220,7 +220,7 @@ class AbstractDocumentPersistenceTest {
         LocalVectorStore store = newStore(repository, 2, QuantizationType.NONE);
 
         Instant baseline = Instant.now();
-        VectorStoreMetadata metadata = VectorStoreMetadata.fromDefinition(store.getDefinition(), StorageType.POSTGRES);
+        VectorStoreMetadata metadata = VectorStoreMetadata.fromDefinition(store.getDefinition());
         metadata.setSyncWatermark(baseline);
         repository.saveStoreMetadata(metadata);
 
@@ -263,7 +263,7 @@ class AbstractDocumentPersistenceTest {
 
     private static final class TestPersistence extends AbstractDocumentPersistence {
         private TestPersistence(VectorDocumentRepository repository) {
-            super(repository, StorageType.POSTGRES, new VectorLiteProperties());
+            super(repository, new VectorLiteProperties());
         }
     }
 }

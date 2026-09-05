@@ -18,13 +18,11 @@ import org.bson.Document;
 import org.bson.types.Binary;
 import veclite.config.VectorLiteProperties;
 import veclite.model.QuantizationType;
-import veclite.model.StorageType;
 import veclite.api.VectorStoreMetadata;
 import veclite.persistence.VectorDocumentEntity;
 import veclite.persistence.VectorDocumentRepository;
 import veclite.persistence.VectorStorageFormat;
 import veclite.persistence.StoreNameValidator;
-import veclite.persistence.StorePersistenceHandle;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -64,7 +62,6 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
     private static final String META_EMBEDDING_MODEL_VERSION = "embedding_model_version";
     private static final String META_QUANTIZATION = "quantization";
     private static final String META_INDEXED_FIELDS = "indexed_metadata_fields";
-    private static final String META_PERSISTENCE_MODE = "persistence_mode";
     private static final String META_ACTIVE_COUNT = "active_count";
     private static final String META_SQ8_MIN = "sq8_min_per_dim";
     private static final String META_SQ8_SCALE = "sq8_scale_per_dim";
@@ -102,20 +99,13 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
     }
 
     @Override
-    public StorePersistenceHandle ensureStore(String storeName) {
+    public void ensureStore(String storeName) {
         StoreNameValidator.validate(storeName);
         if (ensuredCollections.add(storeName)) {
             MongoCollection<Document> collection = documents(storeName);
             collection.createIndex(new Document(FIELD_DOC_ID, 1), new com.mongodb.client.model.IndexOptions().unique(true));
             collection.createIndex(new Document(FIELD_UPDATED_AT, 1));
         }
-        return new StorePersistenceHandle(storeName, storeName);
-    }
-
-    @Override
-    public StorePersistenceHandle handle(String storeName) {
-        StoreNameValidator.validate(storeName);
-        return new StorePersistenceHandle(storeName, storeName);
     }
 
     @Override
@@ -131,7 +121,8 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         if (entities == null || entities.isEmpty()) {
             return;
         }
-        MongoCollection<Document> collection = ensureStore(storeName) != null ? documents(storeName) : null;
+        ensureStore(storeName);
+        MongoCollection<Document> collection = documents(storeName);
         List<ReplaceOneModel<Document>> operations = new ArrayList<>(entities.size());
         for (VectorDocumentEntity entity : entities) {
             operations.add(new ReplaceOneModel<>(
@@ -226,7 +217,6 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         set.append(META_EMBEDDING_MODEL_VERSION, metadata.getEmbeddingModelVersion());
         set.append(META_QUANTIZATION, metadata.getQuantization() != null ? metadata.getQuantization().name() : QuantizationType.NONE.name());
         set.append(META_INDEXED_FIELDS, metadata.getIndexedMetadataFields());
-        set.append(META_PERSISTENCE_MODE, metadata.getPersistenceMode() != null ? metadata.getPersistenceMode().name() : StorageType.MONGODB.name());
         set.append(META_ACTIVE_COUNT, metadata.getActiveCount());
         set.append(META_SQ8_MIN, metadata.getSq8MinPerDim() != null ? VectorDocumentEntity.encodeVector(metadata.getSq8MinPerDim()) : null);
         set.append(META_SQ8_SCALE, metadata.getSq8ScalePerDim() != null ? VectorDocumentEntity.encodeVector(metadata.getSq8ScalePerDim()) : null);
@@ -341,12 +331,6 @@ public class MongoVectorDocumentRepository implements VectorDocumentRepository {
         }
         List<String> indexedFields = doc.getList(META_INDEXED_FIELDS, String.class);
         metadata.setIndexedMetadataFields(indexedFields != null ? indexedFields : new ArrayList<>());
-        String mode = doc.getString(META_PERSISTENCE_MODE);
-        try {
-            metadata.setPersistenceMode(mode != null ? StorageType.valueOf(mode) : StorageType.MONGODB);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalStateException("Unknown persistence mode in store metadata: " + mode, e);
-        }
         metadata.setActiveCount(doc.getInteger(META_ACTIVE_COUNT, 0));
         byte[] sq8Min = asBytes(doc.get(META_SQ8_MIN));
         byte[] sq8Scale = asBytes(doc.get(META_SQ8_SCALE));

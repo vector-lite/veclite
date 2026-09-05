@@ -29,6 +29,12 @@ public class VectorSearchRequest implements Serializable {
     @Schema(description = "Metadata filter expression")
     private FilterExpression filter;
 
+    @Schema(description = "Whether to normalize similarity score (e.g. cosine mapped to [0, 1] via (1 + cos) / 2 for Elasticsearch compatibility)", example = "false")
+    private Boolean normalizeScore = false;
+
+    @Schema(description = "Custom mathematical expression to calculate or normalize final score (e.g. 'score * 2.0 - 1.0', '(score + 1.0) / 2.0')", example = "score * 2.0 - 1.0")
+    private String scoreExpression;
+
     public VectorSearchRequest() {}
 
     public String getStoreName() { return storeName; }
@@ -45,4 +51,8 @@ public class VectorSearchRequest implements Serializable {
     public void setMinScore(Float minScore) { this.minScore = minScore; }
     public FilterExpression getFilter() { return filter; }
     public void setFilter(FilterExpression filter) { this.filter = filter; }
+    public Boolean getNormalizeScore() { return normalizeScore; }
+    public void setNormalizeScore(Boolean normalizeScore) { this.normalizeScore = normalizeScore; }
+    public String getScoreExpression() { return scoreExpression; }
+    public void setScoreExpression(String scoreExpression) { this.scoreExpression = scoreExpression; }
 }

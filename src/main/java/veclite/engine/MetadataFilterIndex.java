@@ -33,10 +33,21 @@ public class MetadataFilterIndex {
             if (metadata.containsKey(field)) {
                 Object val = metadata.get(field);
                 if (val != null) {
-                    fieldIndexes
-                        .computeIfAbsent(field, k -> new ConcurrentHashMap<>())
-                        .computeIfAbsent(val, k -> new BitSet())
-                        .set(offset);
+                    if (val instanceof Collection<?> coll) {
+                        for (Object elem : coll) {
+                            if (elem != null) {
+                                fieldIndexes
+                                    .computeIfAbsent(field, k -> new ConcurrentHashMap<>())
+                                    .computeIfAbsent(elem, k -> new BitSet())
+                                    .set(offset);
+                            }
+                        }
+                    } else {
+                        fieldIndexes
+                            .computeIfAbsent(field, k -> new ConcurrentHashMap<>())
+                            .computeIfAbsent(val, k -> new BitSet())
+                            .set(offset);
+                    }
                 }
             }
         }
@@ -55,9 +66,29 @@ public class MetadataFilterIndex {
                 if (val != null) {
                     Map<Object, BitSet> map = fieldIndexes.get(field);
                     if (map != null) {
-                        BitSet bs = map.get(val);
-                        if (bs != null) {
-                            bs.clear(offset);
+                        if (val instanceof Collection<?> coll) {
+                            for (Object elem : coll) {
+                                if (elem != null) {
+                                    BitSet bs = map.get(elem);
+                                    if (bs != null) {
+                                        bs.clear(offset);
+                                        if (bs.isEmpty()) {
+                                            map.remove(elem);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            BitSet bs = map.get(val);
+                            if (bs != null) {
+                                bs.clear(offset);
+                                if (bs.isEmpty()) {
+                                    map.remove(val);
+                                }
+                            }
+                        }
+                        if (map.isEmpty()) {
+                            fieldIndexes.remove(field);
                         }
                     }
                 }
@@ -79,11 +110,27 @@ public class MetadataFilterIndex {
      *     主动返回 null 让上层走逐条比较逻辑。
      */
     public BitSet evaluate(FilterExpression filter) {
-        if (filter == null || filter.getField() == null || !isIndexed(filter.getField())) {
+        if (filter == null) {
+            return null;
+        }
+        FilterExpression.Operator op = filter.getOperator();
+        if (op == FilterExpression.Operator.AND || op == FilterExpression.Operator.OR) {
+            List<FilterExpression> children = filter.getChildren();
+            if (children == null || children.isEmpty()) return null;
+            BitSet result = null;
+            for (FilterExpression child : children) {
+                BitSet childBits = evaluate(child);
+                if (childBits == null) return null;
+                if (result == null) result = childBits;
+                else if (op == FilterExpression.Operator.AND) result.and(childBits);
+                else result.or(childBits);
+            }
+            return result;
+        }
+        if (filter.getField() == null || !isIndexed(filter.getField())) {
             return null;
         }
         String field = filter.getField();
-        FilterExpression.Operator op = filter.getOperator();
 
         if (op == FilterExpression.Operator.EQ) {
             return getMatchingOffsetsEq(field, filter.getValue());

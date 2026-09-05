@@ -35,7 +35,7 @@ class VectorLitePropertiesBindingTest {
                 .bind("veclite", Bindable.of(VectorLiteProperties.class))
                 .get();
 
-        assertEquals(StorageType.MONGODB, properties.getStorage().getType());
+        assertEquals(StorageType.POSTGRES, properties.getStorage().getType());
         // uri 由本地环境决定（凭证、库路径可能以任意组合出现），只做协议前缀断言；
         // 库名由独立的 database 配置承载，见下方断言
         String uri = properties.getStorage().getMongodb().getUri();

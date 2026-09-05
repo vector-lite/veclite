@@ -151,4 +151,16 @@ public class OffHeapSQ8Buffer {
             writeLock.unlock();
         }
     }
+
+    /** 释放该缓冲区持有的 DirectBuffer 引用，避免 Store 删除后继续占用堆外内存。 */
+    public void close() {
+        writeLock.lock();
+        try {
+            directBuffer = null;
+            size = 0;
+            capacity = 0;
+        } finally {
+            writeLock.unlock();
+        }
+    }
 }

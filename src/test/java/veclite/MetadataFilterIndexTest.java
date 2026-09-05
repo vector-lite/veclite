@@ -15,10 +15,58 @@ import veclite.model.VectorSearchResult;
 
 import java.util.*;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 /**
  * 倒排位图前置过滤 (EQ / IN) 与 Compact Payload 测试类。
  */
 public class MetadataFilterIndexTest {
+
+    @Test
+    @DisplayName("测试一层 AND / OR 复合过滤")
+    void testCompoundAndOrFilter() {
+        VectorLiteProperties properties = new VectorLiteProperties();
+        LocalVectorEngine engine = new LocalVectorEngine(properties);
+        VectorEngineClientImpl client = new VectorEngineClientImpl(engine, null, null, properties, null);
+        String storeName = "compound_filter_store";
+        VectorStoreDefinition definition = new VectorStoreDefinition();
+        definition.setStoreName(storeName);
+        definition.setDimension(2);
+        definition.setMetric("COSINE");
+        definition.setIndexedMetadataFields(Arrays.asList("category", "tenant"));
+        client.createStore(storeName, definition);
+
+        upsertCompoundDoc(client, storeName, "a", "tech", "t1");
+        upsertCompoundDoc(client, storeName, "b", "tech", "t2");
+        upsertCompoundDoc(client, storeName, "c", "news", "t1");
+
+        VectorSearchRequest request = new VectorSearchRequest();
+        request.setStoreName(storeName);
+        request.setQueryVector(new float[]{1, 0});
+        request.setTopK(10);
+        request.setFilter(FilterExpression.and(
+                FilterExpression.eq("category", "tech"),
+                FilterExpression.eq("tenant", "t1")));
+        List<VectorSearchResult> andResults = client.searchByVector(request);
+        assertEquals(1, andResults.size());
+        assertEquals("a", andResults.get(0).getId());
+
+        request.setFilter(FilterExpression.or(
+                FilterExpression.eq("category", "news"),
+                FilterExpression.eq("tenant", "t2")));
+        List<VectorSearchResult> orResults = client.searchByVector(request);
+        assertEquals(2, orResults.size());
+        assertTrue(orResults.stream().anyMatch(r -> r.getId().equals("b")));
+        assertTrue(orResults.stream().anyMatch(r -> r.getId().equals("c")));
+    }
+
+    private static void upsertCompoundDoc(VectorEngineClientImpl client, String storeName,
+                                          String id, String category, String tenant) {
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("category", category);
+        metadata.put("tenant", tenant);
+        client.upsert(storeName, new VectorDocument(id, new float[]{1, 0}, id, metadata));
+    }
 
     @Test
     @DisplayName("测试倒排位图索引 EQ 和 IN 前置过滤及检索准确性")

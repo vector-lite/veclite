@@ -30,6 +30,9 @@ import java.util.Set;
  */
 public abstract class AbstractDocumentPersistence implements DocumentBackedPersistence {
 
+    /** 整库对账的单批文档数，限制高维向量复制产生的瞬时堆内存。 */
+    private static final int SAVE_BATCH_SIZE = 1000;
+
     private final VectorDocumentRepository repository;
     private final StorageType storageType;
     private final VectorLiteProperties properties;
@@ -62,20 +65,21 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
         }
         String storeName = store.getDefinition().getStoreName();
         repository.ensureStore(storeName);
-        List<VectorDocumentEntity> entities = buildEntities(store);
-        repository.upsertBatch(storeName, entities);
+        Set<String> memoryIds = saveActiveDocumentsInBatches(store, storeName);
 
-        Set<String> memoryIds = new HashSet<>(entities.size());
-        for (VectorDocumentEntity entity : entities) {
-            memoryIds.add(entity.getDocId());
-        }
-        List<String> staleIds = new ArrayList<>();
+        List<String> staleIds = new ArrayList<>(SAVE_BATCH_SIZE);
         for (String remoteId : repository.listDocumentIds(storeName)) {
             if (!memoryIds.contains(remoteId)) {
                 staleIds.add(remoteId);
+                if (staleIds.size() >= SAVE_BATCH_SIZE) {
+                    repository.deleteByIds(storeName, staleIds);
+                    staleIds.clear();
+                }
             }
         }
-        repository.deleteByIds(storeName, staleIds);
+        if (!staleIds.isEmpty()) {
+            repository.deleteByIds(storeName, staleIds);
+        }
 
         repository.saveStoreMetadata(buildMetadata(store));
     }
@@ -217,10 +221,11 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
      * 从内存 Store 构建落库实体：SQ8 冻结态落量化字节（配合逐维参数），
      * 其余（含校准期未冻结）落原始 Float32。
      */
-    private List<VectorDocumentEntity> buildEntities(LocalVectorStore store) {
+    private Set<String> saveActiveDocumentsInBatches(LocalVectorStore store, String storeName) {
         int dimension = store.getDefinition().getDimension();
         int totalCount = store.getVectorBufferSize();
-        List<VectorDocumentEntity> entities = new ArrayList<>(store.getActiveCount());
+        Set<String> memoryIds = new HashSet<>(store.getActiveCount());
+        List<VectorDocumentEntity> batch = new ArrayList<>(Math.min(SAVE_BATCH_SIZE, store.getActiveCount()));
         float[] tempVector = new float[dimension];
         for (int offset = 0; offset < totalCount; offset++) {
             if (store.isOffsetDeleted(offset)) {
@@ -231,10 +236,18 @@ public abstract class AbstractDocumentPersistence implements DocumentBackedPersi
                 continue;
             }
             store.copyVectorFromBuffer(offset, tempVector);
-            entities.add(VectorDocumentEntity.float32(payload.getId(), payload.getText(), payload.getMetadata(),
+            memoryIds.add(payload.getId());
+            batch.add(VectorDocumentEntity.float32(payload.getId(), payload.getText(), payload.getMetadata(),
                     tempVector.clone()));
+            if (batch.size() >= SAVE_BATCH_SIZE) {
+                repository.upsertBatch(storeName, batch);
+                batch.clear();
+            }
         }
-        return entities;
+        if (!batch.isEmpty()) {
+            repository.upsertBatch(storeName, batch);
+        }
+        return memoryIds;
     }
 
     private VectorStoreMetadata buildMetadata(LocalVectorStore store) {

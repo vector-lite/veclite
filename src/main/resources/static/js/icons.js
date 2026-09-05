@@ -48,6 +48,20 @@ export const icons = {
     <svg viewBox="0 0 16 16" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
       <rect x="2" y="2.5" width="12" height="11" rx="1.2"/><path d="M2 6h12M2 9.7h12M6.5 6v7.5M10.8 6v7.5"/>
     </svg>`,
+  copy: (size = 14) => `
+    <svg viewBox="0 0 16 16" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/>
+      <path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1"/>
+    </svg>`,
+  chart: (size = 15) => `
+    <svg viewBox="0 0 16 16" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M2 13.5h12M4 11.5v-3M8 11.5v-7M12 11.5v-5"/>
+    </svg>`,
+  eye: (size = 15) => `
+    <svg viewBox="0 0 16 16" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M1.5 8s2.5-5 6.5-5 6.5 5 6.5 5-2.5 5-6.5 5-6.5-5-6.5-5Z"/>
+      <circle cx="8" cy="8" r="2.2"/>
+    </svg>`,
 };
 
 /** 空态插画：简单、留白、线性 */

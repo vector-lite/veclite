@@ -92,8 +92,24 @@ public class LocalVectorEngine implements VectorStoreManager {
     @Override
     public void dropStore(String storeName) {
         if (storeName != null) {
-            stores.remove(storeName);
+            LocalVectorStore removed = stores.remove(storeName);
+            if (removed != null) {
+                removed.close();
+            }
         }
+    }
+
+    /** 释放所有 Store 及搜索线程池资源，供 Spring 容器销毁和手动关闭使用。 */
+    public void close() {
+        for (LocalVectorStore store : stores.values()) {
+            try {
+                store.close();
+            } catch (RuntimeException ignored) {
+                // 尽力关闭其余 Store
+            }
+        }
+        stores.clear();
+        ParallelSearchExecutor.shutdown();
     }
 
     @Override
